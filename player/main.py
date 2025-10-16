@@ -1,37 +1,55 @@
-# main.py
 import time
-from vision import ScreenReader
+from tinyhouse import Color
+from screen_controller import ScreenController
 from engine_bridge import Engine
-from actions import execute_ui_move
 
 SEARCH_DEPTH = 9
-ENGINE_PATH = "../engine_main.exe"
+ENGINE_PATH = "..\engine_main.exe"
+
+# Set this to your variant's start position FEN
+START_FEN = "fhwk/3p/P3/KWHF w 1"
 
 
 def main():
-    sr = ScreenReader()  # holds ROIs, templates, orientation
+    sc = ScreenController()
     eng = Engine(ENGINE_PATH)
 
-    # Initial scan
-    prev = sr.read_boardstate()  # pieces, pockets, side_to_move
-    while True:
-        cur = sr.read_boardstate()
+    # Initialize engine ONCE from the initial FEN
+    # (You can also read the first on-screen position and assert it matches START_FEN)
+    eng.newgame(START_FEN)
 
-        # Opp move arrived?
-        if cur.side_to_move != prev.side_to_move:
-            # Either detect explicit move delta, or just trust UI and move on
-            prev = cur
+    # If we are Black and it is White to move, we must wait for the opponent first.
+
+    our_turn = Color.WHITE == sc.my_side
+
+    while True:
+
+        if not our_turn:
+            mv = sc.detect_move()
+            if mv is None:
+                time.sleep(0.05)
+                continue
+
+            # Advance engine with opponent move
+            eng.play(mv)
+            our_turn = True
             continue
 
-        # Our turn
-        fen = to_fen(cur)  # your variant FEN
-        eng.position(fen)
-        bm = eng.go(SEARCH_DEPTH)["move"]  # "e2e4", "N@f3", "e1g1", "e7e8q", ...
+        # ---- Our turn ----
+        # Ask engine for a move from its current internal Position
+        res = eng.go(SEARCH_DEPTH)
+        mv = res["move"]
+        if mv == "none" or not mv:
+            # No legal move (checkmate/stalemate). Stop.
+            break
 
-        execute_ui_move(bm, sr.board_to_pixels)  # clicks
-        time.sleep(0.15)
-        # Verify board changed accordingly
-        prev = sr.read_boardstate()
+        # Execute on UI
+        sc.execute_ui_move(mv)
+
+        # Advance engine with our move to keep internal state consistent
+        eng.play(mv)
+
+        our_turn = False
 
 
 if __name__ == "__main__":

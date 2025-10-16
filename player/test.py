@@ -2,12 +2,16 @@ from engine_bridge import Engine
 
 ENGINE_PATH = "../engine_main.exe"
 
-eng = Engine(ENGINE_PATH)
-
 fen = "fhwk/3p/P3/KWHF w 1"
 
-eng.position(fen)
+eng = Engine(ENGINE_PATH)
 
-bm = eng.go(9)["move"]
+eng.isready()
+eng.newgame(fen)
 
-print(bm)
+# If we’re Black and White plays first:
+eng.play("a2a3")  # example opponent move observed on screen
+
+bm = eng.go(9)
+print("engine move:", bm["move"])
+eng.play(bm["move"])  # keep internal state in sync after you click it on UI
