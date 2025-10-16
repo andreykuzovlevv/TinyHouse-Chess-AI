@@ -415,29 +415,24 @@ void Position::update_slider_blockers(Color c) const {
     Square ksq = square<KING>(c);
 
     st->blockersForKing[c] = 0;
-    st->pinners[c]         = 0;  // <-- important: reset
 
-    // Enemy HORSEs that geometrically attack ksq
+    // Enemy horses that geometrically attack ksq (reverse pseudo)
     Bitboard snipers = (attacks_bb<HORSE>(ksq) & pieces(HORSE)) & pieces(~c);
 
-    // Ignore those snipers in occupancy so their own squares don't count as blockers
+    // Ignore snipers themselves in occupancy
     Bitboard occupancy = pieces() ^ snipers;
 
     while (snipers) {
-        Square h = pop_lsb(snipers);
+        Square sniperSq = pop_lsb(snipers);
 
-        // Required leg square for this HORSE to attack our king
-        Bitboard leg = horse_leg_bb(h, ksq);  // should be a single-bit bitboard
+        // Leg square required for this horse to attack the king
+        Bitboard leg = horse_leg_bb(sniperSq, ksq);
 
-        // If that leg square is occupied by a piece, it blocks this HORSE
+        // If that leg square is occupied by piece, it's a blocker
         Bitboard b = leg & occupancy;
-
-        // We only care about *our* piece blocking (true pin); enemy-occupied leg is irrelevant for
-        // our pins
-        Bitboard ourBlocker = b & pieces(c);
-        if (ourBlocker) {
-            st->blockersForKing[c] |= ourBlocker;  // the leg square (our piece) is a blocker
-            st->pinners[c] |= square_bb(h);        // the HORSE is a pinner of our piece
+        if (b) {
+            st->blockersForKing[c] |= b;
+            st->pinners[c] |= sniperSq;
         }
     }
 }

@@ -29,7 +29,7 @@ using namespace tiny;
 using namespace Colors;
 
 // ---------- Config ----------
-#define WINDOW_W 1920
+#define WINDOW_W 1420
 #define WINDOW_H 1080
 
 static const std::string START_FEN = "fhwk/3p/P3/KWHF w 1";
@@ -39,7 +39,7 @@ static const int charsize = SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE;
 // Board and UI layout constants (logical)
 struct UIConf {
     // Layout constants (static, not computed dynamically)
-    int boardSizePx = 800;  // square board edge
+    int boardSizePx = 600;  // square board edge
     int marginPx    = 24;
     int squarePx    = boardSizePx / 4;
 
@@ -129,7 +129,7 @@ typedef struct {
 
     // AI
     AsyncAI ai;
-    int     searchDepth = 10;
+    int     searchDepth = 9;
 
     // Rendering
     UIConf                           ui{};
