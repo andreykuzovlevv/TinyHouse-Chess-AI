@@ -26,20 +26,23 @@ def main():
     while True:
         if not our_turn:
             mv = sc.detect_move()
-            print(mv)
             if mv is None:
-                time.sleep(1)
+                time.sleep(0.3)
                 continue
 
             # Advance engine with opponent move
             eng.play(mv)
+
             our_turn = True
             continue
 
         # ---- Our turn ----
         # Ask engine for a move from its current internal Position
+
+        print("start search")
         res = eng.go(SEARCH_DEPTH)
         mv = res["move"]
+        print("Move found: ", mv)
         if mv == "none" or not mv:
             # No legal move (checkmate/stalemate). Stop.
             break

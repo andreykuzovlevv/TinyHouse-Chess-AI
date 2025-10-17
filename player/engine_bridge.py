@@ -1,20 +1,15 @@
 # engine_bridge.py
-import subprocess, threading, queue, sys, time
+import subprocess, threading, queue, time
 
 
 class Engine:
     def __init__(self, path):
-        # Keep one long-lived process/session.
         self.p = subprocess.Popen(
-            [path],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # line buffered
+            [path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1
         )
         self.outq = queue.Queue()
-        self._reader_thread = threading.Thread(target=self._reader, daemon=True)
-        self._reader_thread.start()
+        self.lock = threading.Lock()
+        threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
         for line in self.p.stdout:
@@ -24,60 +19,42 @@ class Engine:
         self.p.stdin.write(s + "\n")
         self.p.stdin.flush()
 
-    def _expect_line(self, prefix: str, timeout: float = 5.0) -> str:
-        """Read lines until one starts with `prefix`. Returns that line."""
+    def _expect(self, prefix: str, timeout: float = 5.0) -> str:
         t0 = time.time()
         while True:
             try:
                 line = self.outq.get(timeout=0.05)
             except queue.Empty:
                 if time.time() - t0 > timeout:
-                    raise TimeoutError(f"waiting for '{prefix}' timed out")
+                    raise TimeoutError(f"timeout waiting for '{prefix}'")
                 continue
             if line.startswith(prefix):
                 return line
-            # Drop other 'info string ...' lines silently
+            # discard other lines
 
-    # --- Protocol commands ---
-
-    def isready(self) -> bool:
-        self._send("isready")
-        line = self._expect_line("readyok")
-        return True
-
-    def quit(self):
-        try:
-            self._send("quit")
-        except Exception:
-            pass
+    # --- Public API: each call holds lock until it gets its reply ---
 
     def newgame(self, fen: str):
-        self._send(f"newgame {fen}")
-        # Optional: wait for acknowledgment
-        # self._expect_line("ok")
+        with self.lock:
+            self._send(f"newgame {fen}")
+            # optional ack; safe to proceed immediately
 
     def play(self, move: str) -> bool:
-        self._send(f"play {move}")
-        # Engine will reply either "played <move>" or "illegal"
-        line = self._expect_line("played", timeout=3.0)
-        # If you prefer strict checking, parse 'played <move>' and compare.
-        return True
-
-    # Legacy: allow setting a full position in one shot (useful for tests)
-    def position(self, fen: str):
-        self._send(f"position {fen}")
-        # optional ack:
-        # self._expect_line("info string position set")
+        with self.lock:
+            self._send(f"play {move}")
+            line = self._expect("played", timeout=3.0)
+            return line.startswith("played")
 
     def go(self, depth: int) -> dict:
-        self._send(f"go depth {depth}")
-        best = {}
-        while True:
-            line = self.outq.get()
-            if line.startswith("bestmove"):
-                toks = line.split()
-                best["move"] = toks[1]
-                if "score" in toks:
-                    best["score"] = toks[toks.index("score") + 1]
-                return best
-            # else: consume other 'info ...' lines
+        with self.lock:
+            self._send(f"go depth {depth}")
+            best = {}
+            while True:
+                line = self.outq.get()
+                if line.startswith("bestmove"):
+                    toks = line.split()
+                    best["move"] = toks[1]
+                    if "score" in toks:
+                        best["score"] = toks[toks.index("score") + 1]
+                    return best
+                # ignore "info ..." lines

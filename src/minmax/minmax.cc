@@ -12,8 +12,8 @@ Value evaluate(const Position& pos) {
     // Pocket material (drops)
     // Only PAWN/HORSE/FERZ/WAZIR are used in pockets
     for (PieceType pt = PAWN; pt <= WAZIR; ++pt) {
-        diff += int(pos.pocket(WHITE).count(pt)) * type_value(pt);
-        diff -= int(pos.pocket(BLACK).count(pt)) * type_value(pt);
+        diff += int(pos.pocket(WHITE).count(pt)) * type_value(pt) * 0.7;
+        diff -= int(pos.pocket(BLACK).count(pt)) * type_value(pt) * 0.7;
     }
 
     // Perspective: return score for side to move

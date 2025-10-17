@@ -3,17 +3,16 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import mss
 import numpy as np
 import pyautogui
-from PIL import Image
 import torch
 from torchvision import transforms
+from PIL import Image
 
 from tinyhouse import (
     Color,
@@ -31,13 +30,11 @@ from tinyhouse import (
     square_to_str,
     str_to_square,
     code_from_piece,
+    code_to_pt,
     FILES_BY_PIECE,
 )
 
-# ---- Constants / thresholds tuned for “yellow highlight”, no animations ----
-# rgb(186, 202, 73)
-# rgb(247, 245, 125)
-
+# ---- Constants / thresholds ----
 
 # Occupancy heuristic (gradient energy per pixel)
 GRAD_MIN = 5.0  # tune if necessary
@@ -47,6 +44,14 @@ TM_THRESH = 0.70  # accept best match if above this
 
 # Calibration file default
 CALIB_PATH = Path("tinyhouse_calibration.json")
+
+_DET_CLASS_BY_PT = {
+    PieceType.PAWN: 0,  # "P"
+    PieceType.HORSE: 1,  # "H"
+    PieceType.FERZ: 2,  # "F"
+    PieceType.WAZIR: 3,  # "W"
+    PieceType.KING: 4,  # "K"
+}
 
 
 @dataclass
@@ -74,13 +79,6 @@ class Rect:
 
 
 @dataclass
-class _Tmpl:
-    img: np.ndarray  # uint8, grayscale
-    mask: np.ndarray  # uint8, 0 or 255
-    scale: float
-
-
-@dataclass
 class Calibration:
     board: Rect
     our_pockets: Rect  # left panel area for our reserve
@@ -91,6 +89,7 @@ class ScreenController:
         self,
         calib_path: Path = CALIB_PATH,
         cls_model_path: str = "models/square_cls.pt",
+        pockets_model_path: str = "models/pockets.pt",
     ):
         pyautogui.FAILSAFE = False
         self._sct = mss.mss()
@@ -102,13 +101,20 @@ class ScreenController:
         self._cell_h = self.calib.board.h / 4.0
 
         # ---- Square-classifier model (PyTorch) ----
-        self._cls_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._cls_model, self._cls_class_names, self._cls_tf = (
-            self._load_square_classifier(cls_model_path, self._cls_device)
+            self._load_square_classifier(cls_model_path, self._device)
+        )
+        self._pckts_model, self._pckts_class_names = self._load_pockets_detector(
+            pockets_model_path, self._device
         )
 
         # Establish our side from screen (bottom-left piece at game start)
         self._my_side: Color = self._detect_my_side()
+
+        self._opp_pawns: List[Square] = [
+            Square.SQ_D3 if self._my_side == Color.WHITE else Square.SQ_A2
+        ]
 
     # --------------------------- Public API ---------------------------
 
@@ -129,7 +135,6 @@ class ScreenController:
         img = self._grab_rect(self.calib.board)
 
         highlighted = self._detect_highlight_cells(img)
-        print(highlighted)
         if not highlighted:
             return None
 
@@ -146,45 +151,33 @@ class ScreenController:
                 return None
 
             mv = f"{pt_code(pt)}@{square_to_str(to_sq)}"
-            self._apply_drop(to_sq, pt)
-            self._side_to_move = self._side_to_move.other()
+
+            if to_sq not in self._opp_pawns and pt == PieceType.PAWN:
+                self._opp_pawns.append(to_sq)
+
             return mv
 
         if len(hl_squares) == 2:
             a, b = hl_squares
             # Decide which is origin vs destination.
             # Heuristic: origin cell is empty AFTER the move; destination is occupied.
-            occ_a = self._cell_occupied(img, self._square_to_cell_index(a))
-            occ_b = self._cell_occupied(img, self._square_to_cell_index(b))
+            ptA, cA = self._classify_cell_piece(img, self._square_to_cell_index(a))
+            ptB, cB = self._classify_cell_piece(img, self._square_to_cell_index(b))
 
-            if occ_a and not occ_b:
-                # Rare, but handle inverted shade quirks by re-grab once
-                time.sleep(0.02)
-                img = self._grab_rect(self.calib.board)
-                occ_a = self._cell_occupied(img, self._square_to_cell_index(a))
-                occ_b = self._cell_occupied(img, self._square_to_cell_index(b))
+            if ptA == PieceType.NO_PIECE_TYPE and ptB == PieceType.NO_PIECE_TYPE:
+                return None
 
-            if occ_a and not occ_b:
-                # Still inverted; fall back to board mirror: origin must contain opponent piece
-                if self._is_side_piece_at(self._side_to_move.other(), a):
-                    from_sq, to_sq = a, b
-                elif self._is_side_piece_at(self._side_to_move.other(), b):
-                    from_sq, to_sq = b, a
-                else:
-                    # As last resort, pick by gradient magnitude (higher => occupied => destination)
-                    from_sq, to_sq = (b, a) if occ_a else (a, b)
-            else:
-                from_sq, to_sq = (a, b) if not occ_a and occ_b else (b, a)
+            if ptA != PieceType.NO_PIECE_TYPE and ptB != PieceType.NO_PIECE_TYPE:
+                return None
+
+            from_sq, to_sq = (a, b) if not int(ptA) and int(ptB) else (b, a)
+            print("from: ", from_sq.to_string(), "\nto: ", to_sq.to_string())
 
             # Determine if this was a promotion by opponent:
-            moving_piece = self._board.get(from_sq)
-            was_pawn = (
-                moving_piece is not None and self._ptype(moving_piece) == PieceType.PAWN
-            )
+            was_pawn = True if from_sq in self._opp_pawns else False
+
             dest_last_rank = rank_of(to_sq) == (
-                Rank.RANK_4
-                if self._side_to_move.other() == Color.WHITE
-                else Rank.RANK_1
+                Rank.RANK_4 if self._my_side.other() == Color.WHITE else Rank.RANK_1
             )
             promo_suffix = ""
             if was_pawn and dest_last_rank:
@@ -193,14 +186,22 @@ class ScreenController:
                     img, self._square_to_cell_index(to_sq)
                 )
                 if pt_to in (PieceType.HORSE, PieceType.WAZIR, PieceType.FERZ):
-                    promo_suffix = f"={self._pt_code(pt_to)}"
+                    promo_suffix = f"={pt_code(pt_to)}"
+
+            print("was pawn: ", was_pawn, ". last rank: ", dest_last_rank)
 
             mv = f"{square_to_str(from_sq)}{square_to_str(to_sq)}{promo_suffix}"
-            self._apply_move(from_sq, to_sq, promo_suffix)
-            self._side_to_move = self._side_to_move.other()
+
+            if was_pawn:
+                self._opp_pawns.remove(from_sq)
+                if not dest_last_rank:
+                    self._opp_pawns.append(to_sq)
+
             return mv
 
-        # 3+ highlighted cells should not occur with animations off; ignore frame.
+        if len(hl_squares) > 2:
+            raise Exception("Number of Highlighted squares was more then 2")
+
         return None
 
     def execute_ui_move(self, move_str: str) -> None:
@@ -214,17 +215,15 @@ class ScreenController:
         if "@" in move_str:
             # Drop: "<P|H|F|W>@e2"
             code, sq = move_str.split("@", 1)
-            pt = self._code_to_pt(code[0])
+            pt = code_to_pt(code[0])
             to_sq = str_to_square(sq)
             self._do_drop_on_ui(pt, to_sq)
-            self._apply_drop(to_sq, pt, mover=self._side_to_move)  # our drop
-            self._side_to_move = self._side_to_move.other()
             return
 
         # Normal/promotion
         if "=" in move_str:
             main, promo_code = move_str.split("=")
-            promo_pt = self._code_to_pt(promo_code[0])
+            promo_pt = code_to_pt(promo_code[0])
         else:
             main, promo_pt = move_str, None
 
@@ -236,15 +235,7 @@ class ScreenController:
 
         if promo_pt is not None:
             # Click the right piece in the promotion popup
-            self._choose_promotion_piece(promo_pt)
-
-        self._apply_move(
-            from_sq,
-            to_sq,
-            f"={self._pt_code(promo_pt)}" if promo_pt else "",
-            mover=self._side_to_move,
-        )
-        self._side_to_move = self._side_to_move.other()
+            self._choose_promotion_piece(promo_pt, to_sq)
 
     # ------------------------ Calibration (one-time) ------------------------
 
@@ -372,6 +363,93 @@ class ScreenController:
         )
         return model, class_names, tf
 
+    # --- Mapping: TinyHouse PieceType -> detector class index (no color) ---
+
+    def _load_pockets_detector(self, model_path: str, device: "torch.device"):
+        """
+        Load Ultralytics YOLO detector for pockets. Returns (model, class_names).
+        Expects 5 classes: P,H,F,W,K in that exact order.
+        """
+        from ultralytics import YOLO
+
+        model = YOLO(model_path)
+        # move to device (ultralytics manages device internally but we can hint via model.to)
+        try:
+            model.to(str(device))
+        except Exception:
+            pass
+        # names mapping (index -> string)
+        names = []
+        if hasattr(model, "names") and model.names:
+            # dict or list depending on version
+            if isinstance(model.names, dict):
+                # ensure 0..N order
+                names = [model.names[i] for i in sorted(model.names.keys())]
+            else:
+                names = list(model.names)
+        else:
+            names = ["P", "H", "F", "W", "K"]  # fallback
+        return model, names
+
+    def _detect_pocket_piece_center(
+        self, want_pt: PieceType, conf_thres: float = 0.40
+    ) -> tuple[int, int] | None:
+        """
+        Detect the requested piece in the OUR pockets ROI and return (sx, sy) in screen coordinates.
+        Returns None if not found. One retry at a lower conf if empty.
+        """
+        # Grab ROI (BGR -> RGB)
+        r = self.calib.our_pockets  # expects (x,y,w,h) or object with .x/.y
+        roi_bgr = self._grab_rect(r)
+        if roi_bgr is None or roi_bgr.size == 0:
+            return None
+        roi_rgb = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2RGB)
+
+        # YOLO inference on ndarray
+        results = self._pckts_model.predict(
+            source=roi_rgb,
+            conf=conf_thres,
+            verbose=False,
+        )
+        if not results:
+            return None
+
+        res = results[0]
+        if res.boxes is None or len(res.boxes) == 0:
+            if conf_thres > 0.10:
+                return self._detect_pocket_piece_center(want_pt, conf_thres=0.10)
+            return None
+
+        det_idx = _DET_CLASS_BY_PT.get(want_pt, None)
+        if det_idx is None:
+            return None
+
+        boxes = res.boxes
+        cls = boxes.cls.cpu().numpy().astype(int)
+        conf = boxes.conf.cpu().numpy()
+        xyxy = boxes.xyxy.cpu().numpy()
+
+        match_idxs = np.where(cls == det_idx)[0]
+        if match_idxs.size == 0:
+            if conf_thres > 0.10:
+                return self._detect_pocket_piece_center(want_pt, conf_thres=0.10)
+            return None
+
+        best_local = match_idxs[np.argmax(conf[match_idxs])]
+        x1, y1, x2, y2 = xyxy[best_local]
+        cx = 0.5 * (x1 + x2)
+        cy = 0.5 * (y1 + y2)
+
+        # Map ROI -> screen
+        x0 = getattr(r, "x", None)
+        y0 = getattr(r, "y", None)
+        if x0 is None or y0 is None:  # assume tuple (x,y,w,h)
+            x0, y0 = r[0], r[1]
+
+        sx = int(round(x0 + cx))
+        sy = int(round(y0 + cy))
+        return sx, sy
+
     def _detect_highlight_cells(self, board_img_bgr: np.ndarray) -> List[int]:
         """
         Return ONLY opponent-highlighted cell indices (0..15).
@@ -440,7 +518,6 @@ class ScreenController:
             return []
 
         # 2) keep ONLY opponent-highlighted cells
-        opponent = self._my_side.other()
         opp_in_hl = False
         for idx in raw_hl:
             pt, col = self._classify_cell_piece(board_img_bgr, idx)
@@ -455,26 +532,6 @@ class ScreenController:
         # If none of the highlighted cells show an opponent piece, it’s our own highlight -> ignore
         return []
 
-    def _cell_occupied(self, board_img_bgr: np.ndarray, cell_idx: int) -> bool:
-        """
-        Edge/gradient heuristic: occupied cells exhibit stronger gradients.
-        """
-        row, col = divmod(cell_idx, 4)
-        x1 = int(col * self._cell_w)
-        y1 = int(row * self._cell_h)
-        x2 = int(min(board_img_bgr.shape[1], x1 + self._cell_w))
-        y2 = int(min(board_img_bgr.shape[0], y1 + self._cell_h))
-
-        cell = board_img_bgr[y1:y2, x1:x2]
-        if cell.size == 0:
-            return False
-        g = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
-        gx = cv2.Sobel(g, cv2.CV_16S, 1, 0, ksize=3)
-        gy = cv2.Sobel(g, cv2.CV_16S, 0, 1, ksize=3)
-        mag = cv2.add(np.abs(gx), np.abs(gy)).astype(np.float32)
-        score = float(mag.mean())
-        return score >= GRAD_MIN
-
     def _classify_cell_piece(self, board_img_bgr: np.ndarray, cell_idx: int):
         # ---- crop cell (screen row/col from cell_idx) ----
         row, col = divmod(cell_idx, 4)
@@ -486,13 +543,10 @@ class ScreenController:
         if cell.size == 0:
             return PieceType.NO_PIECE_TYPE, None
 
-        # ---- model inference (RGB -> PIL -> transform) ----
-        from PIL import Image
-
         cell_rgb = cv2.cvtColor(cell, cv2.COLOR_BGR2RGB)
         im = Image.fromarray(cell_rgb)
 
-        x = self._cls_tf(im).unsqueeze(0).to(self._cls_device)
+        x = self._cls_tf(im).unsqueeze(0).to(self._device)
         with torch.no_grad():
             logits = self._cls_model(x)
             probs = torch.softmax(logits, dim=1)[0]
@@ -569,82 +623,80 @@ class ScreenController:
         pyautogui.moveTo(tx, ty, duration=0)
         pyautogui.mouseUp()
 
-    def _choose_promotion_piece(self, pt: PieceType) -> None:
+    def _square_to_screen_col(self, s: Square) -> int:
         """
-        Find the template of the promotion piece inside promo_area and click it.
+        Return the on-screen column index (0..3, left->right on screen) for a square.
+        Uses the same orientation logic as _square_to_cell_index (which already accounts for self._my_side).
         """
-        r = self.calib.promo_area
-        img = self._grab_rect(r)
-        # Choose correct color = our color (we are promoting on our turn)
-        piece = Piece(int(pt) if self._my_side == Color.WHITE else int(pt) + 8)
-        tmpl = self._templates.get(piece)
-        if tmpl is None:
-            # If we lack color-specific asset, try color-agnostic search over both
-            cand = [Piece(int(pt)), Piece(int(pt) + 8)]
-            for p in cand:
-                tmpl = self._templates.get(p)
-                if tmpl is not None:
-                    piece = p
-                    break
-        if tmpl is None:
+        idx = self._square_to_cell_index(s)  # row-major from top-left of the screen
+        _row, col = divmod(idx, 4)
+        return col
+
+    def _choose_promotion_piece(self, pt: PieceType, sq: Square) -> None:
+        """
+        Click the requested promotion piece in the 2x2 popup overlay.
+        Popup is aligned to the board grid and always occupies the top two rows on screen.
+        Piece layout in popup:
+            (row=0, col=left)  -> FERZ
+            (row=0, col=right) -> WAZIR
+            (row=1, col=left)  -> HORSE
+            (row=1, col=right) -> empty
+        """
+        time.sleep(0.2)
+        # --- Determine which two on-screen columns the popup spans ---
+        promo_col = self._square_to_screen_col(sq)  # 0..3 (left->right on screen)
+
+        if promo_col == 0:
+            popup_cols = (0, 1)
+        elif promo_col == 1:
+            popup_cols = (1, 2)
+        else:  # promo_col in {2, 3}
+            popup_cols = (2, 3)
+
+        # Popup rows are always the top two rows on screen
+        popup_rows = (0, 1)
+
+        # --- Map requested piece type to (row, col) within the popup ---
+        # top-left(FERZ), top-right(WAZIR), bottom-left(HORSE), bottom-right empty
+        if pt == PieceType.FERZ:
+            target_row, target_col = popup_rows[0], popup_cols[0]
+        elif pt == PieceType.WAZIR:
+            target_row, target_col = popup_rows[0], popup_cols[1]
+        elif pt == PieceType.HORSE:
+            target_row, target_col = popup_rows[1], popup_cols[0]
+        else:
+            # No other piece types are present in the popup (PAWN/KING not valid here).
             return
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        th, tw = tmpl.shape[:2]
-        if gray.shape[0] < th or gray.shape[1] < tw:
-            return
-        res = cv2.matchTemplate(gray, tmpl, cv2.TM_CCOEFF_NORMED)
-        _, score, _, max_loc = cv2.minMaxLoc(res)
-        if score < TM_THRESH:
-            return
-        px = r.x + max_loc[0] + tw // 2
-        py = r.y + max_loc[1] + th // 2
-        pyautogui.moveTo(px, py, duration=0)
+        # --- Convert on-screen (row, col) -> pixel center and click ---
+        bx, by, bw, bh = (
+            self.calib.board.x,
+            self.calib.board.y,
+            self.calib.board.w,
+            self.calib.board.h,
+        )
+        # Centers of board cells in screen coordinates, top-left origin
+        cx = bx + int((target_col + 0.5) * self._cell_w)
+        cy = by + int((target_row + 0.5) * self._cell_h)
+
+        pyautogui.moveTo(cx, cy, duration=0)
         pyautogui.click()
 
     def _do_drop_on_ui(self, pt: PieceType, to_sq: Square) -> None:
         """
         Drag the requested piece from our pockets to the board.
         """
-        # Find the piece icon in our pockets region
-        r = self.calib.our_pockets
-        img = self._grab_rect(r)
+        # 1) detect the pocket piece center (screen coords)
+        pick = self._detect_pocket_piece_center(pt, conf_thres=0.40)
 
-        # Our color, our piece
-        piece = Piece(int(pt) if self._my_side == Color.WHITE else int(pt) + 8)
-        tmpl = self._templates.get(piece)
-
-        # Fallback: if exact color template missing, accept either color (UI may tint icons differently)
-        search_pieces = [piece]
-        if tmpl is None:
-            search_pieces = [Piece(int(pt)), Piece(int(pt) + 8)]
-
-        found = None
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        for p in search_pieces:
-            t = self._templates.get(p)
-            if t is None:
-                continue
-            th, tw = t.shape[:2]
-            if gray.shape[0] < th or gray.shape[1] < tw:
-                continue
-            res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED)
-            score = float(res.max())
-            if score >= TM_THRESH:
-                _, _, _, max_loc = cv2.minMaxLoc(res)
-                found = (max_loc[0] + tw // 2, max_loc[1] + th // 2)
-                break
-
-        if found is None:
-            # As a degrade, click center of pockets to pick first piece, then drag.
-            sx = r.x + r.w // 3
-            sy = r.y + r.h // 3
+        # Fallback if detector didn’t find it: use center of pockets region
+        if pick is None:
+            raise Exception("No piece detected in the pocket")
         else:
-            sx = r.x + found[0]
-            sy = r.y + found[1]
+            sx, sy = pick
 
+        # 2) drag to target square center
         tx, ty = self._square_center_xy(to_sq)
-
         pyautogui.moveTo(sx, sy, duration=0)
         pyautogui.mouseDown()
         pyautogui.moveTo(tx, ty, duration=0)

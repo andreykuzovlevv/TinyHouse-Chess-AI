@@ -1,0 +1,9 @@
+path: dataset_labeled/pockets
+train: images
+val: images
+names:
+  0: P
+  1: H
+  2: F
+  3: W
+  4: K

@@ -55,7 +55,7 @@ using Value = int;
 constexpr Value PawnValue  = 100;
 constexpr Value HorseValue = 200;
 constexpr Value FerzValue  = 200;
-constexpr Value WazirValue = 300;
+constexpr Value WazirValue = 250;
 
 inline constexpr Value type_value(PieceType pt) {
     switch (pt) {
