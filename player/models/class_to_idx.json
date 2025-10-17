@@ -1,0 +1,12 @@
+{
+  "B_FERZ": 0,
+  "B_HORSE": 1,
+  "B_KING": 2,
+  "B_PAWN": 3,
+  "B_WAZIR": 4,
+  "W_FERZ": 5,
+  "W_HORSE": 6,
+  "W_KING": 7,
+  "W_PAWN": 8,
+  "W_WAZIR": 9
+}

@@ -163,13 +163,13 @@ def main():
     ap.add_argument(
         "--data",
         type=Path,
-        default=Path("player/dataset_labeled/squares"),
+        default=Path("dataset_labeled/squares"),
         help="Path to labeled squares root (folders per class)",
     )
     ap.add_argument(
         "--outdir",
         type=Path,
-        default=Path("player/models"),
+        default=Path("models"),
         help="Where to save model and artifacts",
     )
     ap.add_argument("--imgsz", type=int, default=IMG_SIZE)
@@ -213,7 +213,7 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
     # AMP if CUDA available
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+    scaler = torch.cuda.amp.GradScaler("cuda")
 
     best_val_acc = 0.0
     for epoch in range(1, args.epochs + 1):

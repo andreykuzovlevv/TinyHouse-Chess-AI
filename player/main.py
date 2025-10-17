@@ -21,13 +21,14 @@ def main():
     # If we are Black and it is White to move, we must wait for the opponent first.
 
     our_turn = Color.WHITE == sc.my_side
+    print("My side: ", sc.my_side.to_string())
 
     while True:
-
         if not our_turn:
             mv = sc.detect_move()
+            print(mv)
             if mv is None:
-                time.sleep(0.05)
+                time.sleep(1)
                 continue
 
             # Advance engine with opponent move

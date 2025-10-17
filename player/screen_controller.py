@@ -12,6 +12,8 @@ import mss
 import numpy as np
 import pyautogui
 from PIL import Image
+import torch
+from torchvision import transforms
 
 from tinyhouse import (
     Color,
@@ -20,7 +22,9 @@ from tinyhouse import (
     Square,
     File,
     Rank,
-    SQUARE_NB,
+    pt_code,
+    color_of,
+    type_of,
     make_square,
     file_of,
     rank_of,
@@ -31,9 +35,9 @@ from tinyhouse import (
 )
 
 # ---- Constants / thresholds tuned for “yellow highlight”, no animations ----
-HL_H_LO, HL_H_HI = 18, 60  # Hue range for yellow/orange-ish
-HL_S_MIN, HL_V_MIN = 80, 120  # Saturation / Value minima in [0..255]
-HL_FRACTION = 0.04  # ≥ 4% of a cell’s pixels flagged => highlighted
+# rgb(186, 202, 73)
+# rgb(247, 245, 125)
+
 
 # Occupancy heuristic (gradient energy per pixel)
 GRAD_MIN = 5.0  # tune if necessary
@@ -85,9 +89,8 @@ class Calibration:
 class ScreenController:
     def __init__(
         self,
-        pieces_dir: str = "assets",
         calib_path: Path = CALIB_PATH,
-        start_fen: str = "fhwk/3p/P3/KWHF w 1",
+        cls_model_path: str = "models/square_cls.pt",
     ):
         pyautogui.FAILSAFE = False
         self._sct = mss.mss()
@@ -98,20 +101,14 @@ class ScreenController:
         self._cell_w = self.calib.board.w / 4.0
         self._cell_h = self.calib.board.h / 4.0
 
-        # Rasterize/load templates for all piece PNGs
-        self._templates: Dict[Piece, np.ndarray] = self._load_templates(pieces_dir)
+        # ---- Square-classifier model (PyTorch) ----
+        self._cls_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._cls_model, self._cls_class_names, self._cls_tf = (
+            self._load_square_classifier(cls_model_path, self._cls_device)
+        )
 
         # Establish our side from screen (bottom-left piece at game start)
         self._my_side: Color = self._detect_my_side()
-        print(self.my_side.to_string())
-
-        # Internal board mirror
-        self._board: Dict[Square, Optional[Piece]] = {}
-        self._load_board_from_fen(start_fen)
-
-        # Running clock side-to-move mirror. We only need it for promotion direction.
-        # main.py’s engine owns the true state; here we keep it consistent via eng.play(mv) in main.
-        self._side_to_move: Color = Color.WHITE if (" w " in start_fen) else Color.BLACK
 
     # --------------------------- Public API ---------------------------
 
@@ -132,6 +129,7 @@ class ScreenController:
         img = self._grab_rect(self.calib.board)
 
         highlighted = self._detect_highlight_cells(img)
+        print(highlighted)
         if not highlighted:
             return None
 
@@ -142,20 +140,13 @@ class ScreenController:
             # Drop by opponent onto hl_squares[0]
             to_sq = hl_squares[0]
             # Identify piece type on the destination cell (now occupied by the dropped piece)
-            pt, _col = self._classify_cell_piece(img, self._square_to_cell_index(to_sq))
+            pt, _col = self._classify_cell_piece(img, highlighted[0])
+
             if pt == PieceType.NO_PIECE_TYPE:
-                # Fallback: try best-of-three rescans quickly
-                time.sleep(0.03)
-                img = self._grab_rect(self.calib.board)
-                pt, _col = self._classify_cell_piece(
-                    img, self._square_to_cell_index(to_sq)
-                )
-                if pt == PieceType.NO_PIECE_TYPE:
-                    return None
-            mv = f"{self._pt_code(pt)}@{square_to_str(to_sq)}"
-            self._apply_drop(
-                to_sq, pt, mover=self._side_to_move.other()
-            )  # opponent’s drop
+                return None
+
+            mv = f"{pt_code(pt)}@{square_to_str(to_sq)}"
+            self._apply_drop(to_sq, pt)
             self._side_to_move = self._side_to_move.other()
             return mv
 
@@ -205,9 +196,7 @@ class ScreenController:
                     promo_suffix = f"={self._pt_code(pt_to)}"
 
             mv = f"{square_to_str(from_sq)}{square_to_str(to_sq)}{promo_suffix}"
-            self._apply_move(
-                from_sq, to_sq, promo_suffix, mover=self._side_to_move.other()
-            )
+            self._apply_move(from_sq, to_sq, promo_suffix)
             self._side_to_move = self._side_to_move.other()
             return mv
 
@@ -352,33 +341,119 @@ class ScreenController:
         return make_square(File(f), Rank(r))
 
     # ------------------------ Internals: detection ------------------------
+    def _load_square_classifier(self, ckpt_path: str, device: torch.device):
+        """
+        Load square classifier exported by train_square_classifier.py.
+        Returns: (model.eval(), class_names: List[str], transform)
+        """
+        ckpt = torch.load(ckpt_path, map_location=device)
+        class_names = ckpt["class_names"]
+        img_size = ckpt.get("img_size", 128)
+
+        # Build the same backbone head shape as in training
+        from torchvision import models
+
+        model = models.resnet18(weights=None)
+        model.fc = torch.nn.Sequential(
+            torch.nn.Dropout(p=0.20),
+            torch.nn.Linear(model.fc.in_features, len(class_names)),
+        )
+        model.load_state_dict(ckpt["model_state"])
+        model.to(device).eval()
+
+        tf = transforms.Compose(
+            [
+                transforms.Resize((img_size, img_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
+        return model, class_names, tf
 
     def _detect_highlight_cells(self, board_img_bgr: np.ndarray) -> List[int]:
         """
-        Return indices (0..15) of cells whose pixel fraction classified as yellow ≥ HL_FRACTION.
+        Return ONLY opponent-highlighted cell indices (0..15).
+        Steps:
+        1) Corner-sample each cell to detect highlight (two known highlight colors).
+        2) Keep only highlighted cells that currently contain an OPPONENT piece
+            according to _classify_cell_piece(...).
         """
-        hsv = cv2.cvtColor(board_img_bgr, cv2.COLOR_BGR2HSV)
-        h, w = hsv.shape[:2]
-        cw, ch = int(self._cell_w), int(self._cell_h)
 
-        mask = cv2.inRange(
-            hsv,
-            (HL_H_LO, HL_S_MIN, HL_V_MIN),
-            (HL_H_HI, 255, 255),
-        )
+        # --- Convert target highlight colors to LAB once ---
+        def rgb_to_lab(rgb):
+            bgr = np.uint8([[[rgb[2], rgb[1], rgb[0]]]])
+            return cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)[0, 0, :]
 
-        highlighted: List[int] = []
+        lab1 = rgb_to_lab((186, 202, 73))
+        lab2 = rgb_to_lab((247, 245, 125))
+
+        def delta_e(labA, labB) -> float:
+            d = labA - labB
+            return float(np.sqrt(np.dot(d, d)))
+
+        lab_board = cv2.cvtColor(board_img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        h, w = lab_board.shape[:2]
+        cw = int(self._cell_w)
+        ch = int(self._cell_h)
+
+        inset = max(6, int(min(self._cell_w, self._cell_h) * 0.08))
+        patch = max(6, int(min(self._cell_w, self._cell_h) * 0.14))
+        DELTA_E_THR = 18.0
+        MIN_CORNERS_MATCH = 2
+
+        # 1) raw highlight detection (corner sampling)
+        raw_hl: List[int] = []
         for row in range(4):
             for col in range(4):
                 x1 = int(col * self._cell_w)
                 y1 = int(row * self._cell_h)
                 x2 = min(w, x1 + cw)
                 y2 = min(h, y1 + ch)
-                cell = mask[y1:y2, x1:x2]
-                frac = float(np.count_nonzero(cell)) / float(cell.size + 1e-6)
-                if frac >= HL_FRACTION:
-                    highlighted.append(row * 4 + col)
-        return highlighted
+
+                # four corner patches
+                tl = (x1 + inset, y1 + inset)
+                tr = (max(x1, x2 - inset - patch), y1 + inset)
+                bl = (x1 + inset, max(y1, y2 - inset - patch))
+                br = (max(x1, x2 - inset - patch), max(y1, y2 - inset - patch))
+                corners = [tl, tr, bl, br]
+
+                matches = 0
+                for cx, cy in corners:
+                    cx2 = min(w, cx + patch)
+                    cy2 = min(h, cy + patch)
+                    if cx >= cx2 or cy >= cy2:
+                        continue
+                    mean_lab = lab_board[cy:cy2, cx:cx2].reshape(-1, 3).mean(axis=0)
+                    if (
+                        min(delta_e(mean_lab, lab1), delta_e(mean_lab, lab2))
+                        <= DELTA_E_THR
+                    ):
+                        matches += 1
+
+                if matches >= MIN_CORNERS_MATCH:
+                    raw_hl.append(row * 4 + col)
+
+        if not raw_hl:
+            return []
+
+        # 2) keep ONLY opponent-highlighted cells
+        opponent = self._my_side.other()
+        opp_in_hl = False
+        for idx in raw_hl:
+            pt, col = self._classify_cell_piece(board_img_bgr, idx)
+            if col is not None and col == self.my_side:
+                return []
+            elif col is not None and col == self.my_side.other():
+                opp_in_hl = True
+
+        if opp_in_hl:
+            return raw_hl
+
+        # If none of the highlighted cells show an opponent piece, it’s our own highlight -> ignore
+        return []
 
     def _cell_occupied(self, board_img_bgr: np.ndarray, cell_idx: int) -> bool:
         """
@@ -401,6 +476,7 @@ class ScreenController:
         return score >= GRAD_MIN
 
     def _classify_cell_piece(self, board_img_bgr: np.ndarray, cell_idx: int):
+        # ---- crop cell (screen row/col from cell_idx) ----
         row, col = divmod(cell_idx, 4)
         x1 = int(col * self._cell_w)
         y1 = int(row * self._cell_h)
@@ -410,39 +486,57 @@ class ScreenController:
         if cell.size == 0:
             return PieceType.NO_PIECE_TYPE, None
 
-        # Optional but useful: skip clearly empty cells fast
-        if not self._occupied_by_gradient(cell):
+        # ---- model inference (RGB -> PIL -> transform) ----
+        from PIL import Image
+
+        cell_rgb = cv2.cvtColor(cell, cv2.COLOR_BGR2RGB)
+        im = Image.fromarray(cell_rgb)
+
+        x = self._cls_tf(im).unsqueeze(0).to(self._cls_device)
+        with torch.no_grad():
+            logits = self._cls_model(x)
+            probs = torch.softmax(logits, dim=1)[0]
+
+        # ---- confidence + margin gating ----
+        conf_min = 0.72
+        margin_min = 0.10
+        top2 = torch.topk(probs, k=min(2, probs.numel()))
+        top1_conf = float(top2.values[0])
+        top1_idx = int(top2.indices[0])
+        top2_conf = float(top2.values[1]) if top2.indices.numel() > 1 else 0.0
+        if top1_conf < conf_min or (top1_conf - top2_conf) < margin_min:
             return PieceType.NO_PIECE_TYPE, None
 
-        cell_gray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
-
-        best_score = -1.0
-        best_piece = None
-
-        for p, (tmpl, mask) in self._templates.items():
-            th, tw = tmpl.shape[:2]
-            ch, cw = cell_gray.shape[:2]
-            if ch < th or cw < tw:
-                # Template larger than cell; skip
-                continue
-
-            res = cv2.matchTemplate(cell_gray, tmpl, cv2.TM_CCORR_NORMED, mask=mask)
-            score = float(res.max())
-            if score > best_score:
-                best_score = score
-                best_piece = p
-
-        if best_piece is None or best_score < 0.85:
+        label = self._cls_class_names[top1_idx]
+        color, pt = self._parse_cls_name(label)
+        if pt == PieceType.NO_PIECE_TYPE:
             return PieceType.NO_PIECE_TYPE, None
+        return pt, color
 
-        return self._ptype(best_piece), self._color(best_piece)
-
-    def _occupied_by_gradient(self, cell_bgr: np.ndarray) -> bool:
-        g = cv2.cvtColor(cell_bgr, cv2.COLOR_BGR2GRAY)
-        gx = cv2.Sobel(g, cv2.CV_16S, 1, 0, ksize=3)
-        gy = cv2.Sobel(g, cv2.CV_16S, 0, 1, ksize=3)
-        mag = cv2.add(np.abs(gx), np.abs(gy)).astype(np.float32)
-        return float(mag.mean()) >= GRAD_MIN
+    def _parse_cls_name(self, name: str) -> Tuple[Optional[Color], PieceType]:
+        """
+        Map folder/class name like 'W_PAWN', 'B_HORSE', ... -> (Color, PieceType).
+        """
+        s = name.strip().upper()
+        color = (
+            Color.WHITE
+            if s.startswith("W_")
+            else (Color.BLACK if s.startswith("B_") else None)
+        )
+        t = s.split("_", 1)[-1] if "_" in s else s
+        if t == "PAWN":
+            pt = PieceType.PAWN
+        elif t == "HORSE":
+            pt = PieceType.HORSE
+        elif t == "FERZ":
+            pt = PieceType.FERZ
+        elif t == "WAZIR":
+            pt = PieceType.WAZIR
+        elif t == "KING":
+            pt = PieceType.KING
+        else:
+            pt = PieceType.NO_PIECE_TYPE
+        return color, pt
 
     # ------------------------ Internals: my side / templates ------------------------
 
@@ -464,142 +558,6 @@ class ScreenController:
             raise RuntimeError("Unable to recognize piece color on bottom-left square.")
 
         return Color.WHITE if col == Color.WHITE else Color.BLACK
-
-    def _load_templates(self, pieces_dir: str):
-        """
-        Load PNGs with alpha → (gray, mask) tuples.
-        No resizing, no blur. Sprites must fit inside a board cell.
-        """
-        templates = {}
-
-        for piece, filename in FILES_BY_PIECE.items():
-            path = Path(pieces_dir) / filename
-            if not path.exists():
-                continue
-
-            raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-            if raw is None:
-                continue
-
-            # Handle LA (2ch), RGB (3ch), RGBA (4ch), or GRAY
-            if raw.ndim == 2:
-                gray = raw.astype(np.uint8)
-                alpha = np.full_like(gray, 255, dtype=np.uint8)
-            elif raw.shape[2] == 2:
-                gray = raw[:, :, 0].astype(np.uint8)
-                alpha = raw[:, :, 1].astype(np.uint8)
-            elif raw.shape[2] == 3:
-                gray = cv2.cvtColor(raw[:, :, :3], cv2.COLOR_BGR2GRAY)
-                alpha = np.full(gray.shape, 255, dtype=np.uint8)
-            else:  # 4 channels
-                bgr = raw[:, :, :3]
-                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                alpha = raw[:, :, 3].astype(np.uint8)
-
-            # Binary mask from alpha (no morphology if you don’t want it)
-            _, mask = cv2.threshold(alpha, 10, 255, cv2.THRESH_BINARY)
-
-            # Zero the template background (optional but helps)
-            gray = (gray * (mask > 0)).astype(np.uint8)
-
-            templates[piece] = (gray, mask)
-
-        return templates
-
-    # ------------------------ Internals: board mirror ------------------------
-
-    def _ptype(self, p: Piece) -> PieceType:
-        return PieceType(int(p) & 7)
-
-    def _color(self, p: Piece) -> Color:
-        return Color(int(p) >> 3)
-
-    def _pt_code(self, pt: PieceType) -> str:
-        return {
-            PieceType.PAWN: "P",
-            PieceType.HORSE: "H",
-            PieceType.FERZ: "F",
-            PieceType.WAZIR: "W",
-            PieceType.KING: "K",
-        }.get(pt, "?")
-
-    def _code_to_pt(self, ch: str) -> PieceType:
-        return {
-            "P": PieceType.PAWN,
-            "H": PieceType.HORSE,
-            "F": PieceType.FERZ,
-            "W": PieceType.WAZIR,
-            "K": PieceType.KING,
-        }.get(ch.upper(), PieceType.PAWN)
-
-    def _is_side_piece_at(self, side: Color, sq: Square) -> bool:
-        p = self._board.get(sq)
-        return p is not None and self._color(p) == side
-
-    def _load_board_from_fen(self, fen: str) -> None:
-        """
-        Minimal 4x4 FEN parser for this variant. Ignores reserves/turn counters.
-        Example: "fhwk/3p/P3/KWHF w 1"
-        """
-        board_part = fen.split()[0]
-        ranks = board_part.split("/")
-        if len(ranks) != 4:
-            raise ValueError("Expected 4 ranks in FEN")
-        for r_idx, rank_str in enumerate(
-            reversed(ranks)
-        ):  # r=0 is rank1 (bottom for WHITE)
-            file_idx = 0
-            for ch in rank_str:
-                if ch.isdigit():
-                    file_idx += int(ch)
-                else:
-                    sq = make_square(File(file_idx), Rank(r_idx))
-                    p = self._piece_from_code(ch)
-                    self._board[sq] = p
-                    file_idx += 1
-            while file_idx < 4:
-                sq = make_square(File(file_idx), Rank(r_idx))
-                self._board[sq] = None
-                file_idx += 1
-
-    def _piece_from_code(self, ch: str) -> Piece:
-        ch = ch.strip()
-        if not ch:
-            return Piece(0)
-        # Reuse tinyhouse’s mapping via code string
-        for piece, fname in FILES_BY_PIECE.items():
-            if code_from_piece(piece) == ch:
-                return piece
-        # Fallback heuristic
-        upper = ch.upper()
-        pt_map = {
-            "P": PieceType.PAWN,
-            "H": PieceType.HORSE,
-            "F": PieceType.FERZ,
-            "W": PieceType.WAZIR,
-            "K": PieceType.KING,
-        }
-        pt = pt_map.get(upper, PieceType.PAWN)
-        base = int(pt)
-        return Piece(base if ch.isupper() else base + 8)
-
-    def _apply_move(
-        self, from_sq: Square, to_sq: Square, promo_suffix: str, mover: Color
-    ) -> None:
-        # capture if any
-        self._board[to_sq] = self._board.get(from_sq)
-        self._board[from_sq] = None
-
-        if promo_suffix:
-            pt = self._code_to_pt(promo_suffix[1])  # "=H" -> "H"
-            base = int(pt)
-            promoted = Piece(base if mover == Color.WHITE else base + 8)
-            self._board[to_sq] = promoted
-
-    def _apply_drop(self, to_sq: Square, pt: PieceType, mover: Color) -> None:
-        base = int(pt)
-        dropped = Piece(base if mover == Color.WHITE else base + 8)
-        self._board[to_sq] = dropped
 
     # ------------------------ Internals: UI actions ------------------------
 

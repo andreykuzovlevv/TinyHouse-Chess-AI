@@ -1,0 +1,29 @@
+{
+  "epoch": 20,
+  "val_loss": 0.01622888632118702,
+  "val_acc": 1.0,
+  "per_class_acc": {
+    "B_FERZ": 1.0,
+    "B_HORSE": 1.0,
+    "B_KING": 0.0,
+    "B_PAWN": 0.0,
+    "B_WAZIR": 0.0,
+    "W_FERZ": 0.0,
+    "W_HORSE": 1.0,
+    "W_KING": 1.0,
+    "W_PAWN": 0.0,
+    "W_WAZIR": 1.0
+  },
+  "class_names": [
+    "B_FERZ",
+    "B_HORSE",
+    "B_KING",
+    "B_PAWN",
+    "B_WAZIR",
+    "W_FERZ",
+    "W_HORSE",
+    "W_KING",
+    "W_PAWN",
+    "W_WAZIR"
+  ]
+}
