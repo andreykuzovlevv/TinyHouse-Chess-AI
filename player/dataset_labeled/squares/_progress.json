@@ -1,0 +1,261 @@
+{
+  "done": {
+    "dataset\\squares\\1760671463213_a1.png": "dataset_labeled\\squares\\W_KING\\1760671463213_a1__W_KING.png",
+    "dataset\\squares\\1760671463213_a2.png": "dataset_labeled\\squares\\W_PAWN\\1760671463213_a2__W_PAWN.png",
+    "dataset\\squares\\1760671463213_a4.png": "dataset_labeled\\squares\\B_FERZ\\1760671463213_a4__B_FERZ.png",
+    "dataset\\squares\\1760671463213_b1.png": "dataset_labeled\\squares\\W_WAZIR\\1760671463213_b1__W_WAZIR.png",
+    "dataset\\squares\\1760671463213_b4.png": "dataset_labeled\\squares\\B_HORSE\\1760671463213_b4__B_HORSE.png",
+    "dataset\\squares\\1760671463213_c1.png": "dataset_labeled\\squares\\W_HORSE\\1760671463213_c1__W_HORSE.png",
+    "dataset\\squares\\1760671463213_c4.png": "dataset_labeled\\squares\\B_WAZIR\\1760671463213_c4__B_WAZIR.png",
+    "dataset\\squares\\1760671463213_d1.png": "dataset_labeled\\squares\\W_FERZ\\1760671463213_d1__W_FERZ.png",
+    "dataset\\squares\\1760671463213_d3.png": "dataset_labeled\\squares\\B_PAWN\\1760671463213_d3__B_PAWN.png",
+    "dataset\\squares\\1760671463213_d4.png": "dataset_labeled\\squares\\B_KING\\1760671463213_d4__B_KING.png",
+    "dataset\\squares\\1760671835918_a1.png": "dataset_labeled\\squares\\W_PAWN\\1760671835918_a1__W_PAWN.png",
+    "dataset\\squares\\1760671835918_a3.png": "dataset_labeled\\squares\\B_FERZ\\1760671835918_a3__B_FERZ.png",
+    "dataset\\squares\\1760671835918_b1.png": "dataset_labeled\\squares\\W_KING\\1760671835918_b1__W_KING.png",
+    "dataset\\squares\\1760671835918_b2.png": "dataset_labeled\\squares\\W_WAZIR\\1760671835918_b2__W_WAZIR.png",
+    "dataset\\squares\\1760671835918_b3.png": "dataset_labeled\\squares\\B_HORSE\\1760671835918_b3__B_HORSE.png",
+    "dataset\\squares\\1760671835918_c2.png": "dataset_labeled\\squares\\W_HORSE\\1760671835918_c2__W_HORSE.png",
+    "dataset\\squares\\1760671835918_c3.png": "dataset_labeled\\squares\\B_WAZIR\\1760671835918_c3__B_WAZIR.png",
+    "dataset\\squares\\1760671835918_c4.png": "dataset_labeled\\squares\\B_KING\\1760671835918_c4__B_KING.png",
+    "dataset\\squares\\1760671835918_d2.png": "dataset_labeled\\squares\\W_FERZ\\1760671835918_d2__W_FERZ.png",
+    "dataset\\squares\\1760671835918_d4.png": "dataset_labeled\\squares\\B_PAWN\\1760671835918_d4__B_PAWN.png",
+    "dataset\\squares\\1760672124420_a1_bl.png": "dataset_labeled\\squares\\W_PAWN\\1760672124420_a1_bl__W_PAWN.png",
+    "dataset\\squares\\1760672153394_b1_br.png": "dataset_labeled\\squares\\W_KING\\1760672153394_b1_br__W_KING.png",
+    "dataset\\squares\\1760672183445_a1_bl.png": "dataset_labeled\\squares\\W_KING\\1760672183445_a1_bl__W_KING.png",
+    "dataset\\squares\\1760672186854_b1_br.png": "dataset_labeled\\squares\\W_PAWN\\1760672186854_b1_br__W_PAWN.png",
+    "dataset\\squares\\1760672204495_a1_bl.png": "dataset_labeled\\squares\\W_WAZIR\\1760672204495_a1_bl__W_WAZIR.png",
+    "dataset\\squares\\1760672208070_b1_br.png": "dataset_labeled\\squares\\W_HORSE\\1760672208070_b1_br__W_HORSE.png",
+    "dataset\\squares\\1760672239325_a1_bl.png": "dataset_labeled\\squares\\W_HORSE\\1760672239325_a1_bl__W_HORSE.png",
+    "dataset\\squares\\1760672242313_b1_br.png": "dataset_labeled\\squares\\W_WAZIR\\1760672242313_b1_br__W_WAZIR.png",
+    "dataset\\squares\\1760672265802_a1_bl.png": "dataset_labeled\\squares\\W_FERZ\\1760672265802_a1_bl__W_FERZ.png",
+    "dataset\\squares\\1760672270439_b1_br.png": "dataset_labeled\\squares\\B_WAZIR\\1760672270439_b1_br__B_WAZIR.png",
+    "dataset\\squares\\1760672281951_a1_bl.png": "dataset_labeled\\squares\\B_WAZIR\\1760672281951_a1_bl__B_WAZIR.png",
+    "dataset\\squares\\1760672286339_b1_br.png": "dataset_labeled\\squares\\W_FERZ\\1760672286339_b1_br__W_FERZ.png",
+    "dataset\\squares\\1760672329724_a1_bl.png": "dataset_labeled\\squares\\B_FERZ\\1760672329724_a1_bl__B_FERZ.png",
+    "dataset\\squares\\1760672333414_b1_br.png": "dataset_labeled\\squares\\B_HORSE\\1760672333414_b1_br__B_HORSE.png",
+    "dataset\\squares\\1760672345105_a1_bl.png": "dataset_labeled\\squares\\B_HORSE\\1760672345105_a1_bl__B_HORSE.png",
+    "dataset\\squares\\1760672348025_b1_br.png": "dataset_labeled\\squares\\B_FERZ\\1760672348025_b1_br__B_FERZ.png",
+    "dataset\\squares\\1760672713348_a1_bl.png": "dataset_labeled\\squares\\B_KING\\1760672713348_a1_bl__B_KING.png",
+    "dataset\\squares\\1760672720083_b1_br.png": "dataset_labeled\\squares\\B_PAWN\\1760672720083_b1_br__B_PAWN.png",
+    "dataset\\squares\\1760672730330_a1_bl.png": "dataset_labeled\\squares\\B_PAWN\\1760672730330_a1_bl__B_PAWN.png",
+    "dataset\\squares\\1760672733664_b1_br.png": "dataset_labeled\\squares\\B_KING\\1760672733664_b1_br__B_KING.png"
+  },
+  "order": [
+    "dataset\\squares\\1760671463213_a1.png",
+    "dataset\\squares\\1760671463213_a2.png",
+    "dataset\\squares\\1760671463213_a3.png",
+    "dataset\\squares\\1760671463213_a4.png",
+    "dataset\\squares\\1760671463213_b1.png",
+    "dataset\\squares\\1760671463213_b2.png",
+    "dataset\\squares\\1760671463213_b3.png",
+    "dataset\\squares\\1760671463213_b4.png",
+    "dataset\\squares\\1760671463213_c1.png",
+    "dataset\\squares\\1760671463213_c2.png",
+    "dataset\\squares\\1760671463213_c3.png",
+    "dataset\\squares\\1760671463213_c4.png",
+    "dataset\\squares\\1760671463213_d1.png",
+    "dataset\\squares\\1760671463213_d2.png",
+    "dataset\\squares\\1760671463213_d3.png",
+    "dataset\\squares\\1760671463213_d4.png",
+    "dataset\\squares\\1760671835918_a1.png",
+    "dataset\\squares\\1760671835918_a2.png",
+    "dataset\\squares\\1760671835918_a3.png",
+    "dataset\\squares\\1760671835918_a4.png",
+    "dataset\\squares\\1760671835918_b1.png",
+    "dataset\\squares\\1760671835918_b2.png",
+    "dataset\\squares\\1760671835918_b3.png",
+    "dataset\\squares\\1760671835918_b4.png",
+    "dataset\\squares\\1760671835918_c1.png",
+    "dataset\\squares\\1760671835918_c2.png",
+    "dataset\\squares\\1760671835918_c3.png",
+    "dataset\\squares\\1760671835918_c4.png",
+    "dataset\\squares\\1760671835918_d1.png",
+    "dataset\\squares\\1760671835918_d2.png",
+    "dataset\\squares\\1760671835918_d3.png",
+    "dataset\\squares\\1760671835918_d4.png",
+    "dataset\\squares\\1760672124420_a1_bl.png",
+    "dataset\\squares\\1760672153394_b1_br.png",
+    "dataset\\squares\\1760672183445_a1_bl.png",
+    "dataset\\squares\\1760672186854_b1_br.png",
+    "dataset\\squares\\1760672204495_a1_bl.png",
+    "dataset\\squares\\1760672208070_b1_br.png",
+    "dataset\\squares\\1760672239325_a1_bl.png",
+    "dataset\\squares\\1760672242313_b1_br.png",
+    "dataset\\squares\\1760672265802_a1_bl.png",
+    "dataset\\squares\\1760672270439_b1_br.png",
+    "dataset\\squares\\1760672281951_a1_bl.png",
+    "dataset\\squares\\1760672286339_b1_br.png",
+    "dataset\\squares\\1760672329724_a1_bl.png",
+    "dataset\\squares\\1760672333414_b1_br.png",
+    "dataset\\squares\\1760672345105_a1_bl.png",
+    "dataset\\squares\\1760672348025_b1_br.png",
+    "dataset\\squares\\1760672713348_a1_bl.png",
+    "dataset\\squares\\1760672720083_b1_br.png",
+    "dataset\\squares\\1760672730330_a1_bl.png",
+    "dataset\\squares\\1760672733664_b1_br.png"
+  ],
+  "idx": 52,
+  "history": [
+    [
+      "dataset\\squares\\1760671463213_a1.png",
+      "dataset_labeled\\squares\\W_KING\\1760671463213_a1__W_KING.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_a2.png",
+      "dataset_labeled\\squares\\W_PAWN\\1760671463213_a2__W_PAWN.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_a4.png",
+      "dataset_labeled\\squares\\B_FERZ\\1760671463213_a4__B_FERZ.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_b1.png",
+      "dataset_labeled\\squares\\W_WAZIR\\1760671463213_b1__W_WAZIR.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_b4.png",
+      "dataset_labeled\\squares\\B_HORSE\\1760671463213_b4__B_HORSE.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_c1.png",
+      "dataset_labeled\\squares\\W_HORSE\\1760671463213_c1__W_HORSE.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_c4.png",
+      "dataset_labeled\\squares\\B_WAZIR\\1760671463213_c4__B_WAZIR.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_d1.png",
+      "dataset_labeled\\squares\\W_FERZ\\1760671463213_d1__W_FERZ.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_d3.png",
+      "dataset_labeled\\squares\\B_PAWN\\1760671463213_d3__B_PAWN.png"
+    ],
+    [
+      "dataset\\squares\\1760671463213_d4.png",
+      "dataset_labeled\\squares\\B_KING\\1760671463213_d4__B_KING.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_a1.png",
+      "dataset_labeled\\squares\\W_PAWN\\1760671835918_a1__W_PAWN.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_a3.png",
+      "dataset_labeled\\squares\\B_FERZ\\1760671835918_a3__B_FERZ.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_b1.png",
+      "dataset_labeled\\squares\\W_KING\\1760671835918_b1__W_KING.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_b2.png",
+      "dataset_labeled\\squares\\W_WAZIR\\1760671835918_b2__W_WAZIR.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_b3.png",
+      "dataset_labeled\\squares\\B_HORSE\\1760671835918_b3__B_HORSE.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_c2.png",
+      "dataset_labeled\\squares\\W_HORSE\\1760671835918_c2__W_HORSE.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_c3.png",
+      "dataset_labeled\\squares\\B_WAZIR\\1760671835918_c3__B_WAZIR.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_c4.png",
+      "dataset_labeled\\squares\\B_KING\\1760671835918_c4__B_KING.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_d2.png",
+      "dataset_labeled\\squares\\W_FERZ\\1760671835918_d2__W_FERZ.png"
+    ],
+    [
+      "dataset\\squares\\1760671835918_d4.png",
+      "dataset_labeled\\squares\\B_PAWN\\1760671835918_d4__B_PAWN.png"
+    ],
+    [
+      "dataset\\squares\\1760672124420_a1_bl.png",
+      "dataset_labeled\\squares\\W_PAWN\\1760672124420_a1_bl__W_PAWN.png"
+    ],
+    [
+      "dataset\\squares\\1760672153394_b1_br.png",
+      "dataset_labeled\\squares\\W_KING\\1760672153394_b1_br__W_KING.png"
+    ],
+    [
+      "dataset\\squares\\1760672183445_a1_bl.png",
+      "dataset_labeled\\squares\\W_KING\\1760672183445_a1_bl__W_KING.png"
+    ],
+    [
+      "dataset\\squares\\1760672186854_b1_br.png",
+      "dataset_labeled\\squares\\W_PAWN\\1760672186854_b1_br__W_PAWN.png"
+    ],
+    [
+      "dataset\\squares\\1760672204495_a1_bl.png",
+      "dataset_labeled\\squares\\W_WAZIR\\1760672204495_a1_bl__W_WAZIR.png"
+    ],
+    [
+      "dataset\\squares\\1760672208070_b1_br.png",
+      "dataset_labeled\\squares\\W_HORSE\\1760672208070_b1_br__W_HORSE.png"
+    ],
+    [
+      "dataset\\squares\\1760672239325_a1_bl.png",
+      "dataset_labeled\\squares\\W_HORSE\\1760672239325_a1_bl__W_HORSE.png"
+    ],
+    [
+      "dataset\\squares\\1760672242313_b1_br.png",
+      "dataset_labeled\\squares\\W_WAZIR\\1760672242313_b1_br__W_WAZIR.png"
+    ],
+    [
+      "dataset\\squares\\1760672265802_a1_bl.png",
+      "dataset_labeled\\squares\\W_FERZ\\1760672265802_a1_bl__W_FERZ.png"
+    ],
+    [
+      "dataset\\squares\\1760672270439_b1_br.png",
+      "dataset_labeled\\squares\\B_WAZIR\\1760672270439_b1_br__B_WAZIR.png"
+    ],
+    [
+      "dataset\\squares\\1760672281951_a1_bl.png",
+      "dataset_labeled\\squares\\B_WAZIR\\1760672281951_a1_bl__B_WAZIR.png"
+    ],
+    [
+      "dataset\\squares\\1760672286339_b1_br.png",
+      "dataset_labeled\\squares\\W_FERZ\\1760672286339_b1_br__W_FERZ.png"
+    ],
+    [
+      "dataset\\squares\\1760672329724_a1_bl.png",
+      "dataset_labeled\\squares\\B_FERZ\\1760672329724_a1_bl__B_FERZ.png"
+    ],
+    [
+      "dataset\\squares\\1760672333414_b1_br.png",
+      "dataset_labeled\\squares\\B_HORSE\\1760672333414_b1_br__B_HORSE.png"
+    ],
+    [
+      "dataset\\squares\\1760672345105_a1_bl.png",
+      "dataset_labeled\\squares\\B_HORSE\\1760672345105_a1_bl__B_HORSE.png"
+    ],
+    [
+      "dataset\\squares\\1760672348025_b1_br.png",
+      "dataset_labeled\\squares\\B_FERZ\\1760672348025_b1_br__B_FERZ.png"
+    ],
+    [
+      "dataset\\squares\\1760672713348_a1_bl.png",
+      "dataset_labeled\\squares\\B_KING\\1760672713348_a1_bl__B_KING.png"
+    ],
+    [
+      "dataset\\squares\\1760672720083_b1_br.png",
+      "dataset_labeled\\squares\\B_PAWN\\1760672720083_b1_br__B_PAWN.png"
+    ],
+    [
+      "dataset\\squares\\1760672730330_a1_bl.png",
+      "dataset_labeled\\squares\\B_PAWN\\1760672730330_a1_bl__B_PAWN.png"
+    ],
+    [
+      "dataset\\squares\\1760672733664_b1_br.png",
+      "dataset_labeled\\squares\\B_KING\\1760672733664_b1_br__B_KING.png"
+    ]
+  ]
+}

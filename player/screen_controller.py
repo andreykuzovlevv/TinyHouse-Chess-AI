@@ -1,58 +1,52 @@
-# screen_controller.py
 from __future__ import annotations
 
 import json
 import time
-import math
-from pathlib import Path
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple, List, Set
+from enum import Enum
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import mss
 import numpy as np
 import pyautogui
+from PIL import Image
 
 from tinyhouse import (
     Color,
+    Piece,
     PieceType,
     Square,
     File,
     Rank,
+    SQUARE_NB,
     make_square,
-    square_to_str,
-    str_to_square,
-    code_to_pt,
-    pt_code,
     file_of,
     rank_of,
-    relative_rank,
+    square_to_str,
+    str_to_square,
+    code_from_piece,
+    FILES_BY_PIECE,
 )
 
-# ---------------------------- Configuration ----------------------------
+# ---- Constants / thresholds tuned for “yellow highlight”, no animations ----
+HL_H_LO, HL_H_HI = 18, 60  # Hue range for yellow/orange-ish
+HL_S_MIN, HL_V_MIN = 80, 120  # Saturation / Value minima in [0..255]
+HL_FRACTION = 0.04  # ≥ 4% of a cell’s pixels flagged => highlighted
 
-_DEFAULT_CONFIG_PATH = Path("./screen_config.json")
-_DEFAULT_ASSETS_DIR = Path("./assets")  # optional: templates for piece classification
+# Occupancy heuristic (gradient energy per pixel)
+GRAD_MIN = 5.0  # tune if necessary
 
-# Yellow highlight (HSV) – tuned for typical “bright yellow” overlays.
-# You can widen these if needed.
-_YELLOW_LOWER_1 = np.array([18, 120, 140], dtype=np.uint8)
-_YELLOW_UPPER_1 = np.array([40, 255, 255], dtype=np.uint8)
+# Template matching
+TM_THRESH = 0.70  # accept best match if above this
 
-# If your client uses a different hue, adjust here.
-_HIGHLIGHT_MIN_AREA_FRACTION = 0.12  # ≥12% of a square considered highlighted
-_STABILITY_MS = 80  # require ~2 frames of stability before emitting
-
-# Edge/texture threshold to decide "empty vs piece"
-_EDGE_EMPTY_THRESHOLD = 12.0  # lower means "emptier square"
-
-# Mouse timings
-pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0.01
+# Calibration file default
+CALIB_PATH = Path("tinyhouse_calibration.json")
 
 
 @dataclass
-class BBox:
+class Rect:
     x: int
     y: int
     w: int
@@ -61,622 +55,665 @@ class BBox:
     def as_tuple(self) -> Tuple[int, int, int, int]:
         return (self.x, self.y, self.w, self.h)
 
+    @property
+    def x2(self) -> int:
+        return self.x + self.w
 
-# ---------------------------- Utility helpers ----------------------------
+    @property
+    def y2(self) -> int:
+        return self.y + self.h
 
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _crop(img: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarray:
-    x, y, w, h = rect
-    return img[y : y + h, x : x + w]
-
-
-def _laplacian_energy(gray: np.ndarray) -> float:
-    # Measures edge/texture content.
-    lap = cv2.Laplacian(gray, cv2.CV_64F)
-    return float(np.mean(np.abs(lap)))
-
-
-def _square_rects(
-    board: BBox, my_side: Color
-) -> Dict[Square, Tuple[int, int, int, int]]:
-    """Map logical Square -> pixel rect on screen, given orientation."""
-    sq_size_w = board.w // 4
-    sq_size_h = board.h // 4
-    rects: Dict[Square, Tuple[int, int, int, int]] = {}
-
-    for r in range(4):  # logical rank: 0..3 (RANK_1..RANK_4)
-        for f in range(4):  # logical file: 0..3 (a..d)
-            sq = make_square(File(f), Rank(r))
-
-            if my_side == Color.WHITE:
-                # bottom of screen shows logical rank 1 (r==0)
-                screen_row = 3 - r  # y increases downward on screen
-                screen_col = f
-            else:
-                # 180° rotation for black-at-bottom orientation
-                screen_row = r
-                screen_col = 3 - f
-
-            x = board.x + screen_col * sq_size_w
-            y = board.y + screen_row * sq_size_h
-            rects[sq] = (x, y, sq_size_w, sq_size_h)
-
-    return rects
-
-
-def _rank_is_last_for(color: Color, r: Rank) -> bool:
-    return (color == Color.WHITE and r == Rank.RANK_4) or (
-        color == Color.BLACK and r == Rank.RANK_1
-    )
-
-
-def _pt_letter(pt: PieceType) -> str:
-    # Always uppercase for engine drop/promo encoding
-    return pt_code(pt)
-
-
-# ---------------------------- Piece templates (optional) ----------------------------
-
-
-class PieceClassifier:
-    """
-    Template-based piece classifier.
-    - If you provide 32–64 px templates per piece (white+black), place them under ./assets like:
-        assets/
-          w_p.png, w_h.png, w_f.png, w_w.png, w_k.png
-          b_p.png, b_h.png, b_f.png, b_w.png, b_k.png
-    - If assets are not found, classifier gracefully returns None and the controller
-      will fall back to internal state where possible.
-    """
-
-    def __init__(self, assets_dir: Path = _DEFAULT_ASSETS_DIR) -> None:
-        self.templates: Dict[str, np.ndarray] = {}
-        self._load(assets_dir)
-
-    def _load(self, assets_dir: Path) -> None:
-        if not assets_dir.exists():
-            return
-        for side in ("w", "b"):
-            for code, name in (
-                ("p", "pawn"),
-                ("h", "horse"),
-                ("f", "ferz"),
-                ("w", "wazir"),
-                ("k", "king"),
-            ):
-                p = assets_dir / f"{side}_{code}.png"
-                if p.exists():
-                    img = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
-                    if img is not None:
-                        self.templates[f"{side}_{code}"] = img
-
-    def classify(
-        self, square_crop_bgr: np.ndarray
-    ) -> Optional[Tuple[Color, PieceType]]:
-        if not self.templates:
-            return None
-
-        gray = cv2.cvtColor(square_crop_bgr, cv2.COLOR_BGR2GRAY)
-        # Resize to a standard size for matching.
-        target = cv2.resize(gray, (48, 48), interpolation=cv2.INTER_AREA)
-
-        best_name = None
-        best_score = -1.0
-        for name, templ in self.templates.items():
-            templ_resized = cv2.resize(templ, (48, 48), interpolation=cv2.INTER_AREA)
-            # Normalized correlation
-            res = cv2.matchTemplate(target, templ_resized, cv2.TM_CCOEFF_NORMED)
-            score = float(res[0][0])
-            if score > best_score:
-                best_score = score
-                best_name = name
-
-        if best_name is None or best_score < 0.5:
-            return None
-
-        side, code = best_name.split("_", 1)
-        color = Color.WHITE if side == "w" else Color.BLACK
-        pt_map = {
-            "p": PieceType.PAWN,
-            "h": PieceType.HORSE,
-            "f": PieceType.FERZ,
-            "w": PieceType.WAZIR,
-            "k": PieceType.KING,
-        }
-        return (color, pt_map[code])
-
-
-# ---------------------------- Screen capture ----------------------------
-
-
-class Grabber:
-    def __init__(self) -> None:
-        self.sct = mss.mss()
-
-    def grab(self, bbox: BBox) -> np.ndarray:
-        shot = self.sct.grab(
-            {"left": bbox.x, "top": bbox.y, "width": bbox.w, "height": bbox.h}
+    def inset(self, px: int) -> "Rect":
+        return Rect(
+            self.x + px, self.y + px, max(1, self.w - 2 * px), max(1, self.h - 2 * px)
         )
-        img = np.array(shot)  # BGRA
-        return img[:, :, :3].copy()  # BGR
 
 
-# ---------------------------- ScreenController ----------------------------
+@dataclass
+class _Tmpl:
+    img: np.ndarray  # uint8, grayscale
+    mask: np.ndarray  # uint8, 0 or 255
+    scale: float
+
+
+@dataclass
+class Calibration:
+    board: Rect
+    our_pockets: Rect  # left panel area for our reserve
 
 
 class ScreenController:
-    """
-    Responsibilities:
-      - Calibrate and store the board bounding box.
-      - Detect side to move (our color) by bottom-left piece at start.
-      - Detect opponent moves via yellow highlights.
-      - Keep an internal board model for disambiguation and promotion handling.
-      - Execute our moves by clicking.
-
-    Configuration persisted to screen_config.json:
-      {
-        "board_bbox": [x, y, w, h],
-        "reserve_clicks": { "W": [x, y], "F": [x, y], "H": [x, y], "P": [x, y] },  # optional for drops
-        "promotion_panel_bbox": [x, y, w, h],                                      # optional
-        "promotion_clicks": { "W": [x, y], "F": [x, y], "H": [x, y] }              # optional fast path
-      }
-    """
-
     def __init__(
         self,
-        config_path: Path = _DEFAULT_CONFIG_PATH,
-        assets_dir: Path = _DEFAULT_ASSETS_DIR,
+        pieces_dir: str = "assets",
+        calib_path: Path = CALIB_PATH,
+        start_fen: str = "fhwk/3p/P3/KWHF w 1",
     ):
-        self.config_path = Path(config_path)
-        self.assets_dir = Path(assets_dir)
+        pyautogui.FAILSAFE = False
+        self._sct = mss.mss()
+        self._calib_path = Path(calib_path)
+        self.calib: Calibration = self._load_or_prompt_calibration(self._calib_path)
 
-        self._grab = Grabber()
-        self._classifier = PieceClassifier(self.assets_dir)
+        # Precompute cell geometry
+        self._cell_w = self.calib.board.w / 4.0
+        self._cell_h = self.calib.board.h / 4.0
 
-        self.board_bbox: Optional[BBox] = None
-        self.square_rect: Dict[Square, Tuple[int, int, int, int]] = {}
+        # Rasterize/load templates for all piece PNGs
+        self._templates: Dict[Piece, np.ndarray] = self._load_templates(pieces_dir)
 
-        self.my_side: Color = Color.WHITE  # set after detection
-        self._opponent: Color = Color.BLACK
+        # Establish our side from screen (bottom-left piece at game start)
+        self._my_side: Color = self._detect_my_side()
+        print(self.my_side.to_string())
 
-        # Internal board state: mapping Square -> Optional[(Color, PieceType)]
-        self._board: Dict[Square, Optional[Tuple[Color, PieceType]]] = {
-            sq: None for sq in list(Square) if sq != Square.SQ_NONE
-        }
+        # Internal board mirror
+        self._board: Dict[Square, Optional[Piece]] = {}
+        self._load_board_from_fen(start_fen)
 
-        # Reserves (counts) – not strictly required but handy if you want additional checks
-        self._reserve: Dict[Color, Dict[PieceType, int]] = {
-            Color.WHITE: {
-                PieceType.PAWN: 0,
-                PieceType.HORSE: 0,
-                PieceType.FERZ: 0,
-                PieceType.WAZIR: 0,
-                PieceType.KING: 0,
-            },
-            Color.BLACK: {
-                PieceType.PAWN: 0,
-                PieceType.HORSE: 0,
-                PieceType.FERZ: 0,
-                PieceType.WAZIR: 0,
-                PieceType.KING: 0,
-            },
-        }
+        # Running clock side-to-move mirror. We only need it for promotion direction.
+        # main.py’s engine owns the true state; here we keep it consistent via eng.play(mv) in main.
+        self._side_to_move: Color = Color.WHITE if (" w " in start_fen) else Color.BLACK
 
-        # Optional UI elements for drops/promo
-        self._reserve_clicks: Dict[str, Tuple[int, int]] = {}
-        self._promotion_panel: Optional[BBox] = None
-        self._promotion_clicks: Dict[str, Tuple[int, int]] = {}
+    # --------------------------- Public API ---------------------------
 
-        # Move highlight debounce
-        self._prev_hs: Set[Square] = set()
-        self._prev_hs_ts = 0
-        self._last_emitted_hs: Set[Square] = set()
-
-        # Load config or calibrate interactively once.
-        self._load_or_calibrate()
-
-        # Compute squares mapping and detect our side (from the bottom-left corner).
-        self._finalize_orientation_and_grid()
-
-        # Initialize internal board from known initial layout (relative to our orientation).
-        self._init_board_from_start()
-
-    # ----------------- public API used by main.py -----------------
+    @property
+    def my_side(self) -> Color:
+        return self._my_side
 
     def detect_move(self) -> Optional[str]:
-        """Return an engine move string (e.g., 'a2a3', 'a3a4=H', 'P@b2') for the opponent; None if nothing new."""
-        if self.board_bbox is None:
+        """
+        Poll the board for a new opponent move based on highlight(s), then
+        return it in engine string format:
+            - normal/capture: "a2a3"
+            - drop:           "P@b2"
+            - promotion:      "a3a4=H" (H|W|F)
+        Updates the internal mirror position when a move is reported.
+        Returns None if no move is currently detected.
+        """
+        img = self._grab_rect(self.calib.board)
+
+        highlighted = self._detect_highlight_cells(img)
+        if not highlighted:
             return None
 
-        img = self._grab.grab(self.board_bbox)
-        hs = self._highlight_squares(img)
+        # Map image-cell indices to board Squares (White perspective)
+        hl_squares = [self._cell_index_to_square(i) for i in highlighted]
 
-        # No highlights
-        if not hs:
-            self._prev_hs = set()
-            self._prev_hs_ts = _now_ms()
-            return None
+        if len(hl_squares) == 1:
+            # Drop by opponent onto hl_squares[0]
+            to_sq = hl_squares[0]
+            # Identify piece type on the destination cell (now occupied by the dropped piece)
+            pt, _col = self._classify_cell_piece(img, self._square_to_cell_index(to_sq))
+            if pt == PieceType.NO_PIECE_TYPE:
+                # Fallback: try best-of-three rescans quickly
+                time.sleep(0.03)
+                img = self._grab_rect(self.calib.board)
+                pt, _col = self._classify_cell_piece(
+                    img, self._square_to_cell_index(to_sq)
+                )
+                if pt == PieceType.NO_PIECE_TYPE:
+                    return None
+            mv = f"{self._pt_code(pt)}@{square_to_str(to_sq)}"
+            self._apply_drop(
+                to_sq, pt, mover=self._side_to_move.other()
+            )  # opponent’s drop
+            self._side_to_move = self._side_to_move.other()
+            return mv
 
-        # Debounce / stability
-        now = _now_ms()
-        if hs != self._prev_hs:
-            self._prev_hs = hs
-            self._prev_hs_ts = now
-            return None
+        if len(hl_squares) == 2:
+            a, b = hl_squares
+            # Decide which is origin vs destination.
+            # Heuristic: origin cell is empty AFTER the move; destination is occupied.
+            occ_a = self._cell_occupied(img, self._square_to_cell_index(a))
+            occ_b = self._cell_occupied(img, self._square_to_cell_index(b))
 
-        if (now - self._prev_hs_ts) < _STABILITY_MS:
-            return None
+            if occ_a and not occ_b:
+                # Rare, but handle inverted shade quirks by re-grab once
+                time.sleep(0.02)
+                img = self._grab_rect(self.calib.board)
+                occ_a = self._cell_occupied(img, self._square_to_cell_index(a))
+                occ_b = self._cell_occupied(img, self._square_to_cell_index(b))
 
-        # Avoid re-emitting the same highlight pattern
-        if hs == self._last_emitted_hs:
-            return None
+            if occ_a and not occ_b:
+                # Still inverted; fall back to board mirror: origin must contain opponent piece
+                if self._is_side_piece_at(self._side_to_move.other(), a):
+                    from_sq, to_sq = a, b
+                elif self._is_side_piece_at(self._side_to_move.other(), b):
+                    from_sq, to_sq = b, a
+                else:
+                    # As last resort, pick by gradient magnitude (higher => occupied => destination)
+                    from_sq, to_sq = (b, a) if occ_a else (a, b)
+            else:
+                from_sq, to_sq = (a, b) if not occ_a and occ_b else (b, a)
 
-        # Interpret move
-        move_str: Optional[str] = None
-        if len(hs) == 2:
-            frm, to = self._resolve_from_to(img, hs)
-            if frm is None or to is None:
-                return None
-
-            # Promotion check: if opponent pawn moved to last rank, determine piece at destination.
-            mover = self._board.get(frm)
+            # Determine if this was a promotion by opponent:
+            moving_piece = self._board.get(from_sq)
+            was_pawn = (
+                moving_piece is not None and self._ptype(moving_piece) == PieceType.PAWN
+            )
+            dest_last_rank = rank_of(to_sq) == (
+                Rank.RANK_4
+                if self._side_to_move.other() == Color.WHITE
+                else Rank.RANK_1
+            )
             promo_suffix = ""
-            if (
-                mover
-                and mover[1] == PieceType.PAWN
-                and _rank_is_last_for(self._opponent, rank_of(to))
-            ):
-                # Classify piece now at destination (should be the promoted piece)
-                crop = _crop(img, self.square_rect[to])
-                classified = self._classifier.classify(crop)
-                if classified:
-                    _, pt = classified
-                    promo_suffix = f"={_pt_letter(pt)}"
+            if was_pawn and dest_last_rank:
+                # Identify which piece now sits on to_sq (must be one of H/W/F)
+                pt_to, _col_to = self._classify_cell_piece(
+                    img, self._square_to_cell_index(to_sq)
+                )
+                if pt_to in (PieceType.HORSE, PieceType.WAZIR, PieceType.FERZ):
+                    promo_suffix = f"={self._pt_code(pt_to)}"
 
-            move_str = square_to_str(frm) + square_to_str(to) + promo_suffix
+            mv = f"{square_to_str(from_sq)}{square_to_str(to_sq)}{promo_suffix}"
+            self._apply_move(
+                from_sq, to_sq, promo_suffix, mover=self._side_to_move.other()
+            )
+            self._side_to_move = self._side_to_move.other()
+            return mv
 
-            # Update internal board
-            self._apply_move_string(move_str, self._opponent)
-
-        elif len(hs) == 1:
-            # Drop: a single highlighted square contains the dropped piece.
-            (to,) = tuple(hs)
-            crop = _crop(img, self.square_rect[to])
-            classified = self._classifier.classify(crop)
-            if not classified:
-                # Fallback: if classifier unavailable, heuristic based on shape cannot be robust; abort gracefully.
-                return None
-            _, pt = classified
-            move_str = f"{_pt_letter(pt)}@{square_to_str(to)}"
-
-            self._apply_move_string(move_str, self._opponent)
-
-        else:
-            # Spurious or UI transitional states
-            return None
-
-        # record emitted highlight signature
-        self._last_emitted_hs = hs
-        return move_str
+        # 3+ highlighted cells should not occur with animations off; ignore frame.
+        return None
 
     def execute_ui_move(self, move_str: str) -> None:
-        """Click on squares to perform our move; handle drops and promotion UI if configured."""
+        """
+        Perform our move on the UI.
+        Supported:
+          - "a2a3"
+          - "a3a4=H" (promotion)
+          - "P@b2"   (drop)
+        """
         if "@" in move_str:
-            # Drop: e.g., "P@b2"
-            piece_letter, dest = move_str.split("@", 1)
-            dest_sq = str_to_square(dest)
-            self._click_drop_then_square(piece_letter, dest_sq)
-            self._apply_move_string(move_str, self.my_side)
+            # Drop: "<P|H|F|W>@e2"
+            code, sq = move_str.split("@", 1)
+            pt = self._code_to_pt(code[0])
+            to_sq = str_to_square(sq)
+            self._do_drop_on_ui(pt, to_sq)
+            self._apply_drop(to_sq, pt, mover=self._side_to_move)  # our drop
+            self._side_to_move = self._side_to_move.other()
             return
 
-        # Normal or promotion: "a2a3" or "a3a4=H"
-        promo_pt: Optional[str] = None
+        # Normal/promotion
         if "=" in move_str:
-            move_part, promo_part = move_str.split("=", 1)
-            promo_pt = promo_part.strip().upper()
+            main, promo_code = move_str.split("=")
+            promo_pt = self._code_to_pt(promo_code[0])
         else:
-            move_part = move_str
+            main, promo_pt = move_str, None
 
-        frm = str_to_square(move_part[:2])
-        to = str_to_square(move_part[2:4])
+        from_str, to_str = main[:2], main[2:4]
+        from_sq = str_to_square(from_str)
+        to_sq = str_to_square(to_str)
 
-        self._click_square(frm)
-        self._click_square(to)
+        self._drag_board_cell(from_sq, to_sq)
 
-        if promo_pt:
-            # If explicit promotion clicks configured, use them; else try to find in panel via templates.
-            self._choose_promotion(promo_pt)
+        if promo_pt is not None:
+            # Click the right piece in the promotion popup
+            self._choose_promotion_piece(promo_pt)
 
-        self._apply_move_string(move_str, self.my_side)
+        self._apply_move(
+            from_sq,
+            to_sq,
+            f"={self._pt_code(promo_pt)}" if promo_pt else "",
+            mover=self._side_to_move,
+        )
+        self._side_to_move = self._side_to_move.other()
 
-    # ----------------- calibration & setup -----------------
+    # ------------------------ Calibration (one-time) ------------------------
 
-    def _load_or_calibrate(self) -> None:
-        if self.config_path.exists():
-            with open(self.config_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            bx, by, bw, bh = data["board_bbox"]
-            self.board_bbox = BBox(bx, by, bw, bh)
+    def calibrate_interactive(self) -> None:
+        """
+        CLI-guided calibration. Hover mouse and press Enter when prompted.
+        Saves JSON to self._calib_path. Call once before playing if needed.
+        """
+        print("\n=== Tinyhouse calibration ===")
+        print(
+            "Put a game on your screen. Ensure the full 4x4 board is visible. Animations off."
+        )
+        print("You will hover specific corners and press ENTER each time.")
 
-            self._reserve_clicks = {
-                k: tuple(v) for k, v in data.get("reserve_clicks", {}).items()
-            }
-            if "promotion_panel_bbox" in data:
-                px, py, pw, ph = data["promotion_panel_bbox"]
-                self._promotion_panel = BBox(px, py, pw, ph)
-            self._promotion_clicks = {
-                k: tuple(v) for k, v in data.get("promotion_clicks", {}).items()
-            }
-            return
+        def get_point(prompt: str) -> Tuple[int, int]:
+            input(prompt)
+            x, y = pyautogui.position()
+            print(f"  captured: ({x}, {y})")
+            return x, y
 
-        # Interactive one-time calibration (console prompts)
-        print("[Calibration] Hover TOP-LEFT of the 4×4 board and press Enter...")
-        input()
-        x1, y1 = pyautogui.position()
-        print("[Calibration] Hover BOTTOM-RIGHT of the 4×4 board and press Enter...")
-        input()
-        x2, y2 = pyautogui.position()
-        x, y = min(x1, x2), min(y1, y2)
-        w, h = abs(x2 - x1), abs(y2 - y1)
-        # Snap to multiples of 4
-        w -= w % 4
-        h -= h % 4
-        self.board_bbox = BBox(x, y, w, h)
+        # Board rect
+        print("\nBoard rectangle:")
+        bx1, by1 = get_point("Hover TOP-LEFT corner of the board, press ENTER...")
+        bx2, by2 = get_point("Hover BOTTOM-RIGHT corner of the board, press ENTER...")
 
-        self._save_config()
+        # Our pockets (left of board, our color)
+        print("\nOur pockets rectangle (area where OUR reserve icons appear):")
+        ox1, oy1 = get_point("Hover TOP-LEFT of our pockets area, press ENTER...")
+        ox2, oy2 = get_point("Hover BOTTOM-RIGHT of our pockets area, press ENTER...")
 
-    def _save_config(self) -> None:
-        if not self.board_bbox:
-            return
-        data = {
-            "board_bbox": [
-                self.board_bbox.x,
-                self.board_bbox.y,
-                self.board_bbox.w,
-                self.board_bbox.h,
-            ],
-            "reserve_clicks": {k: list(v) for k, v in self._reserve_clicks.items()},
-            "promotion_clicks": {k: list(v) for k, v in self._promotion_clicks.items()},
+        self.calib = Calibration(
+            board=Rect(min(bx1, bx2), min(by1, by2), abs(bx2 - bx1), abs(by2 - by1)),
+            our_pockets=Rect(
+                min(ox1, ox2), min(oy1, oy2), abs(ox2 - ox1), abs(oy2 - oy1)
+            ),
+        )
+        self._save_calibration(self._calib_path, self.calib)
+
+        print("Calibration saved.")
+
+    # ------------------------ Internals: capture & mapping ------------------------
+
+    def _grab_rect(self, r: Rect) -> np.ndarray:
+        shot = self._sct.grab({"left": r.x, "top": r.y, "width": r.w, "height": r.h})
+        img = np.array(shot)  # BGRA
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+    def _square_center_xy(self, s: Square) -> Tuple[int, int]:
+        """
+        Return screen coordinates (int x,y) for the center of square s (a1..d4),
+        taking into account board flip based on self._my_side.
+        """
+        f = int(file_of(s))  # 0..3
+        r = int(rank_of(s))  # 0..3
+
+        bx, by, bw, bh = (
+            self.calib.board.x,
+            self.calib.board.y,
+            self.calib.board.w,
+            self.calib.board.h,
+        )
+
+        if self._my_side == Color.WHITE:
+            cx = bx + int((f + 0.5) * self._cell_w)
+            cy = by + int(bh - (r + 0.5) * self._cell_h)
+        else:
+            # Board is flipped for us: 'a1' is top-right on screen
+            cx = bx + int(bw - (f + 0.5) * self._cell_w)
+            cy = by + int((r + 0.5) * self._cell_h)
+        return cx, cy
+
+    def _square_to_cell_index(self, s: Square) -> int:
+        """0..15 cell index laid out row-major from top-left of the board image array."""
+        # independent of self._my_side: this is about the image array indexing (top-left origin)
+        # Row-major: row 0 = top rank on screen
+        # Compute the on-screen row/col for a given chess square under our orientation.
+        if self._my_side == Color.WHITE:
+            row = 3 - int(rank_of(s))
+            col = int(file_of(s))
+        else:
+            row = int(rank_of(s))
+            col = 3 - int(file_of(s))
+        return row * 4 + col
+
+    def _cell_index_to_square(self, idx: int) -> Square:
+        """Inverse of _square_to_cell_index for the current orientation."""
+        row, col = divmod(idx, 4)
+        if self._my_side == Color.WHITE:
+            r = 3 - row
+            f = col
+        else:
+            r = row
+            f = 3 - col
+        return make_square(File(f), Rank(r))
+
+    # ------------------------ Internals: detection ------------------------
+
+    def _detect_highlight_cells(self, board_img_bgr: np.ndarray) -> List[int]:
+        """
+        Return indices (0..15) of cells whose pixel fraction classified as yellow ≥ HL_FRACTION.
+        """
+        hsv = cv2.cvtColor(board_img_bgr, cv2.COLOR_BGR2HSV)
+        h, w = hsv.shape[:2]
+        cw, ch = int(self._cell_w), int(self._cell_h)
+
+        mask = cv2.inRange(
+            hsv,
+            (HL_H_LO, HL_S_MIN, HL_V_MIN),
+            (HL_H_HI, 255, 255),
+        )
+
+        highlighted: List[int] = []
+        for row in range(4):
+            for col in range(4):
+                x1 = int(col * self._cell_w)
+                y1 = int(row * self._cell_h)
+                x2 = min(w, x1 + cw)
+                y2 = min(h, y1 + ch)
+                cell = mask[y1:y2, x1:x2]
+                frac = float(np.count_nonzero(cell)) / float(cell.size + 1e-6)
+                if frac >= HL_FRACTION:
+                    highlighted.append(row * 4 + col)
+        return highlighted
+
+    def _cell_occupied(self, board_img_bgr: np.ndarray, cell_idx: int) -> bool:
+        """
+        Edge/gradient heuristic: occupied cells exhibit stronger gradients.
+        """
+        row, col = divmod(cell_idx, 4)
+        x1 = int(col * self._cell_w)
+        y1 = int(row * self._cell_h)
+        x2 = int(min(board_img_bgr.shape[1], x1 + self._cell_w))
+        y2 = int(min(board_img_bgr.shape[0], y1 + self._cell_h))
+
+        cell = board_img_bgr[y1:y2, x1:x2]
+        if cell.size == 0:
+            return False
+        g = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
+        gx = cv2.Sobel(g, cv2.CV_16S, 1, 0, ksize=3)
+        gy = cv2.Sobel(g, cv2.CV_16S, 0, 1, ksize=3)
+        mag = cv2.add(np.abs(gx), np.abs(gy)).astype(np.float32)
+        score = float(mag.mean())
+        return score >= GRAD_MIN
+
+    def _classify_cell_piece(self, board_img_bgr: np.ndarray, cell_idx: int):
+        row, col = divmod(cell_idx, 4)
+        x1 = int(col * self._cell_w)
+        y1 = int(row * self._cell_h)
+        x2 = int(min(board_img_bgr.shape[1], x1 + self._cell_w))
+        y2 = int(min(board_img_bgr.shape[0], y1 + self._cell_h))
+        cell = board_img_bgr[y1:y2, x1:x2]
+        if cell.size == 0:
+            return PieceType.NO_PIECE_TYPE, None
+
+        # Optional but useful: skip clearly empty cells fast
+        if not self._occupied_by_gradient(cell):
+            return PieceType.NO_PIECE_TYPE, None
+
+        cell_gray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
+
+        best_score = -1.0
+        best_piece = None
+
+        for p, (tmpl, mask) in self._templates.items():
+            th, tw = tmpl.shape[:2]
+            ch, cw = cell_gray.shape[:2]
+            if ch < th or cw < tw:
+                # Template larger than cell; skip
+                continue
+
+            res = cv2.matchTemplate(cell_gray, tmpl, cv2.TM_CCORR_NORMED, mask=mask)
+            score = float(res.max())
+            if score > best_score:
+                best_score = score
+                best_piece = p
+
+        if best_piece is None or best_score < 0.85:
+            return PieceType.NO_PIECE_TYPE, None
+
+        return self._ptype(best_piece), self._color(best_piece)
+
+    def _occupied_by_gradient(self, cell_bgr: np.ndarray) -> bool:
+        g = cv2.cvtColor(cell_bgr, cv2.COLOR_BGR2GRAY)
+        gx = cv2.Sobel(g, cv2.CV_16S, 1, 0, ksize=3)
+        gy = cv2.Sobel(g, cv2.CV_16S, 0, 1, ksize=3)
+        mag = cv2.add(np.abs(gx), np.abs(gy)).astype(np.float32)
+        return float(mag.mean()) >= GRAD_MIN
+
+    # ------------------------ Internals: my side / templates ------------------------
+
+    def _detect_my_side(self) -> Color:
+        """
+        Inspect bottom-left board corner on screen. If that piece is white, we are WHITE; else BLACK.
+        This is robust at the initial position.
+        """
+        # bottom-left in screen coords = Square a1 for us visually
+        # We don’t know side yet, so infer by sampling both K and k templates broadly.
+        # Practical approach: classify the bottom-left cell by color.
+        # Take cell index of bottom-left in screen coordinates:
+        # row=3, col=0
+        board_img = self._grab_rect(self.calib.board)
+        cell_idx = 3 * 4 + 0
+        pt, col = self._classify_cell_piece(board_img, cell_idx)
+
+        if col is None:
+            raise RuntimeError("Unable to recognize piece color on bottom-left square.")
+
+        return Color.WHITE if col == Color.WHITE else Color.BLACK
+
+    def _load_templates(self, pieces_dir: str):
+        """
+        Load PNGs with alpha → (gray, mask) tuples.
+        No resizing, no blur. Sprites must fit inside a board cell.
+        """
+        templates = {}
+
+        for piece, filename in FILES_BY_PIECE.items():
+            path = Path(pieces_dir) / filename
+            if not path.exists():
+                continue
+
+            raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+            if raw is None:
+                continue
+
+            # Handle LA (2ch), RGB (3ch), RGBA (4ch), or GRAY
+            if raw.ndim == 2:
+                gray = raw.astype(np.uint8)
+                alpha = np.full_like(gray, 255, dtype=np.uint8)
+            elif raw.shape[2] == 2:
+                gray = raw[:, :, 0].astype(np.uint8)
+                alpha = raw[:, :, 1].astype(np.uint8)
+            elif raw.shape[2] == 3:
+                gray = cv2.cvtColor(raw[:, :, :3], cv2.COLOR_BGR2GRAY)
+                alpha = np.full(gray.shape, 255, dtype=np.uint8)
+            else:  # 4 channels
+                bgr = raw[:, :, :3]
+                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                alpha = raw[:, :, 3].astype(np.uint8)
+
+            # Binary mask from alpha (no morphology if you don’t want it)
+            _, mask = cv2.threshold(alpha, 10, 255, cv2.THRESH_BINARY)
+
+            # Zero the template background (optional but helps)
+            gray = (gray * (mask > 0)).astype(np.uint8)
+
+            templates[piece] = (gray, mask)
+
+        return templates
+
+    # ------------------------ Internals: board mirror ------------------------
+
+    def _ptype(self, p: Piece) -> PieceType:
+        return PieceType(int(p) & 7)
+
+    def _color(self, p: Piece) -> Color:
+        return Color(int(p) >> 3)
+
+    def _pt_code(self, pt: PieceType) -> str:
+        return {
+            PieceType.PAWN: "P",
+            PieceType.HORSE: "H",
+            PieceType.FERZ: "F",
+            PieceType.WAZIR: "W",
+            PieceType.KING: "K",
+        }.get(pt, "?")
+
+    def _code_to_pt(self, ch: str) -> PieceType:
+        return {
+            "P": PieceType.PAWN,
+            "H": PieceType.HORSE,
+            "F": PieceType.FERZ,
+            "W": PieceType.WAZIR,
+            "K": PieceType.KING,
+        }.get(ch.upper(), PieceType.PAWN)
+
+    def _is_side_piece_at(self, side: Color, sq: Square) -> bool:
+        p = self._board.get(sq)
+        return p is not None and self._color(p) == side
+
+    def _load_board_from_fen(self, fen: str) -> None:
+        """
+        Minimal 4x4 FEN parser for this variant. Ignores reserves/turn counters.
+        Example: "fhwk/3p/P3/KWHF w 1"
+        """
+        board_part = fen.split()[0]
+        ranks = board_part.split("/")
+        if len(ranks) != 4:
+            raise ValueError("Expected 4 ranks in FEN")
+        for r_idx, rank_str in enumerate(
+            reversed(ranks)
+        ):  # r=0 is rank1 (bottom for WHITE)
+            file_idx = 0
+            for ch in rank_str:
+                if ch.isdigit():
+                    file_idx += int(ch)
+                else:
+                    sq = make_square(File(file_idx), Rank(r_idx))
+                    p = self._piece_from_code(ch)
+                    self._board[sq] = p
+                    file_idx += 1
+            while file_idx < 4:
+                sq = make_square(File(file_idx), Rank(r_idx))
+                self._board[sq] = None
+                file_idx += 1
+
+    def _piece_from_code(self, ch: str) -> Piece:
+        ch = ch.strip()
+        if not ch:
+            return Piece(0)
+        # Reuse tinyhouse’s mapping via code string
+        for piece, fname in FILES_BY_PIECE.items():
+            if code_from_piece(piece) == ch:
+                return piece
+        # Fallback heuristic
+        upper = ch.upper()
+        pt_map = {
+            "P": PieceType.PAWN,
+            "H": PieceType.HORSE,
+            "F": PieceType.FERZ,
+            "W": PieceType.WAZIR,
+            "K": PieceType.KING,
         }
-        if self._promotion_panel:
-            data["promotion_panel_bbox"] = [
-                self._promotion_panel.x,
-                self._promotion_panel.y,
-                self._promotion_panel.w,
-                self._promotion_panel.h,
-            ]
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        pt = pt_map.get(upper, PieceType.PAWN)
+        base = int(pt)
+        return Piece(base if ch.isupper() else base + 8)
 
-    def _finalize_orientation_and_grid(self) -> None:
-        assert self.board_bbox is not None
-        # Provisional: compute rects assuming WHITE; we may flip after detecting my_side.
-        self.square_rect = _square_rects(self.board_bbox, Color.WHITE)
+    def _apply_move(
+        self, from_sq: Square, to_sq: Square, promo_suffix: str, mover: Color
+    ) -> None:
+        # capture if any
+        self._board[to_sq] = self._board.get(from_sq)
+        self._board[from_sq] = None
 
-        # Decide my_side by inspecting bottom-left on screen.
-        # We test both WHITE and BLACK orientations and choose the one consistent with start layout.
-        # Heuristic: if bottom-left (screen) looks like a King for our side in white orientation, pick WHITE; else BLACK.
-        # More robust: classify the bottom-left crop and pick its color.
-        img = self._grab.grab(self.board_bbox)
+        if promo_suffix:
+            pt = self._code_to_pt(promo_suffix[1])  # "=H" -> "H"
+            base = int(pt)
+            promoted = Piece(base if mover == Color.WHITE else base + 8)
+            self._board[to_sq] = promoted
 
-        # Bottom-left screen square in WHITE orientation is logical a1.
-        bl_rect_white = self.square_rect[make_square(File.FILE_A, Rank.RANK_1)]
-        bl_crop = _crop(img, bl_rect_white)
+    def _apply_drop(self, to_sq: Square, pt: PieceType, mover: Color) -> None:
+        base = int(pt)
+        dropped = Piece(base if mover == Color.WHITE else base + 8)
+        self._board[to_sq] = dropped
 
-        classified = self._classifier.classify(bl_crop)
-        if classified:
-            color, _ = classified
-            # If bottom-left classified color is WHITE => we are WHITE at bottom
-            self.my_side = Color.WHITE if color == Color.WHITE else Color.BLACK
-        else:
-            # Fallback heuristic: use brightness to guess presence of a white piece icon (often lighter).
-            mean_v = cv2.cvtColor(bl_crop, cv2.COLOR_BGR2HSV)[:, :, 2].mean()
-            self.my_side = Color.WHITE if mean_v > 128 else Color.BLACK
+    # ------------------------ Internals: UI actions ------------------------
 
-        self._opponent = self.my_side.other()
-        # Recompute rects with final orientation
-        self.square_rect = _square_rects(self.board_bbox, self.my_side)
+    def _drag_board_cell(self, from_sq: Square, to_sq: Square) -> None:
+        fx, fy = self._square_center_xy(from_sq)
+        tx, ty = self._square_center_xy(to_sq)
+        pyautogui.moveTo(fx, fy, duration=0)
+        pyautogui.mouseDown()
+        pyautogui.moveTo(tx, ty, duration=0)
+        pyautogui.mouseUp()
 
-    def _init_board_from_start(self) -> None:
-        """Initialize internal 4×4 board from the Tinyhouse starting layout, relative to logical coordinates."""
-        # Clear
-        for sq in self._board.keys():
-            self._board[sq] = None
-
-        # Logical layout (not screen): White back rank a1..d1: K W U F; pawn at a2.
-        # Black back rank a4..d4: F U W K; pawn at d3.
-        # We'll set logical squares independent of orientation. Move application handles side-to-move and rotation is only for clicking/detection.
-
-        def put(file_char: str, rank_num: int, color: Color, pt: PieceType):
-            sq = str_to_square(file_char + str(rank_num))
-            self._board[sq] = (color, pt)
-
-        # White
-        put("a", 1, Color.WHITE, PieceType.KING)
-        put("b", 1, Color.WHITE, PieceType.WAZIR)
-        put("c", 1, Color.WHITE, PieceType.HORSE)
-        put("d", 1, Color.WHITE, PieceType.FERZ)
-        put("a", 2, Color.WHITE, PieceType.PAWN)
-
-        # Black
-        put("a", 4, Color.BLACK, PieceType.FERZ)
-        put("b", 4, Color.BLACK, PieceType.HORSE)
-        put("c", 4, Color.BLACK, PieceType.WAZIR)
-        put("d", 4, Color.BLACK, PieceType.KING)
-        put("d", 3, Color.BLACK, PieceType.PAWN)
-
-    # ----------------- highlight detection & interpretation -----------------
-
-    def _highlight_squares(self, board_bgr: np.ndarray) -> Set[Square]:
-        hsv = cv2.cvtColor(board_bgr, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, _YELLOW_LOWER_1, _YELLOW_UPPER_1)
-        mask = cv2.medianBlur(mask, 5)
-
-        hits: Set[Square] = set()
-        for sq, rect in self.square_rect.items():
-            crop_mask = _crop(mask, rect)
-            frac = float(np.count_nonzero(crop_mask)) / float(crop_mask.size)
-            if frac >= _HIGHLIGHT_MIN_AREA_FRACTION:
-                hits.add(sq)
-        return hits
-
-    def _resolve_from_to(
-        self, board_bgr: np.ndarray, highlighted: Set[Square]
-    ) -> Tuple[Optional[Square], Optional[Square]]:
-        sqs = list(highlighted)
-        s1, s2 = sqs[0], sqs[1]
-
-        # Prefer using internal state: from-square should currently contain an opponent piece; to-square may be empty or occupied by our piece (capture).
-        s1_occ = self._board.get(s1)
-        s2_occ = self._board.get(s2)
-        cands = []
-        if s1_occ and s1_occ[0] == self._opponent:
-            cands.append((s1, s2))
-        if s2_occ and s2_occ[0] == self._opponent:
-            cands.append((s2, s1))
-        if len(cands) == 1:
-            return cands[0]
-
-        # Fallback: edge energy — from-square tends to be emptier after move, to-square has a piece.
-        crop1 = cv2.cvtColor(_crop(board_bgr, self.square_rect[s1]), cv2.COLOR_BGR2GRAY)
-        crop2 = cv2.cvtColor(_crop(board_bgr, self.square_rect[s2]), cv2.COLOR_BGR2GRAY)
-        e1 = _laplacian_energy(crop1)
-        e2 = _laplacian_energy(crop2)
-
-        if e1 < e2 - 1.0:  # margin
-            return (s1, s2)
-        if e2 < e1 - 1.0:
-            return (s2, s1)
-
-        # If still ambiguous, try destination contains opponent piece after capture?
-        # As last resort, return deterministic order to avoid None.
-        return (s1, s2)
-
-    # ----------------- move application to internal model -----------------
-
-    def _apply_move_string(self, move: str, mover: Color) -> None:
-        """Update internal board state and reserves given a move string."""
-        if "@" in move:
-            # Drop: "P@b2"
-            letter, dst = move.split("@", 1)
-            pt = code_to_pt(letter)
-            dst_sq = str_to_square(dst)
-            # Remove from mover's reserve if tracking
-            self._reserve[mover][pt] = max(0, self._reserve[mover][pt] - 1)
-            # Place on board
-            self._board[dst_sq] = (mover, pt)
+    def _choose_promotion_piece(self, pt: PieceType) -> None:
+        """
+        Find the template of the promotion piece inside promo_area and click it.
+        """
+        r = self.calib.promo_area
+        img = self._grab_rect(r)
+        # Choose correct color = our color (we are promoting on our turn)
+        piece = Piece(int(pt) if self._my_side == Color.WHITE else int(pt) + 8)
+        tmpl = self._templates.get(piece)
+        if tmpl is None:
+            # If we lack color-specific asset, try color-agnostic search over both
+            cand = [Piece(int(pt)), Piece(int(pt) + 8)]
+            for p in cand:
+                tmpl = self._templates.get(p)
+                if tmpl is not None:
+                    piece = p
+                    break
+        if tmpl is None:
             return
 
-        promo_pt: Optional[PieceType] = None
-        if "=" in move:
-            base, promo = move.split("=", 1)
-            promo_pt = code_to_pt(promo.strip())
-        else:
-            base = move
-
-        frm = str_to_square(base[:2])
-        to = str_to_square(base[2:4])
-
-        moving = self._board.get(frm)
-        if moving is None:
-            # If we somehow missed a prior update, try to continue gracefully.
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        th, tw = tmpl.shape[:2]
+        if gray.shape[0] < th or gray.shape[1] < tw:
             return
-
-        # Capture?
-        captured = self._board.get(to)
-        if captured is not None:
-            cap_color, cap_pt = captured
-            if cap_color != mover:
-                self._reserve[mover][cap_pt] += 1
-
-        # Move / promote
-        if promo_pt:
-            self._board[to] = (mover, promo_pt)
-        else:
-            self._board[to] = moving
-
-        self._board[frm] = None
-
-    # ----------------- clicking primitives -----------------
-
-    def _center_of(self, rect: Tuple[int, int, int, int]) -> Tuple[int, int]:
-        x, y, w, h = rect
-        return (x + w // 2, y + h // 2)
-
-    def _click_xy(self, x: int, y: int) -> None:
-        pyautogui.moveTo(x, y, duration=0)
+        res = cv2.matchTemplate(gray, tmpl, cv2.TM_CCOEFF_NORMED)
+        _, score, _, max_loc = cv2.minMaxLoc(res)
+        if score < TM_THRESH:
+            return
+        px = r.x + max_loc[0] + tw // 2
+        py = r.y + max_loc[1] + th // 2
+        pyautogui.moveTo(px, py, duration=0)
         pyautogui.click()
 
-    def _click_square(self, sq: Square) -> None:
-        rect = self.square_rect[sq]
-        cx, cy = self._center_of(rect)
-        self._click_xy(cx, cy)
+    def _do_drop_on_ui(self, pt: PieceType, to_sq: Square) -> None:
+        """
+        Drag the requested piece from our pockets to the board.
+        """
+        # Find the piece icon in our pockets region
+        r = self.calib.our_pockets
+        img = self._grab_rect(r)
 
-    def _click_drop_then_square(self, piece_letter: str, dst: Square) -> None:
-        # Prefer a configured reserve click (single-click select), then click destination.
-        target = self._reserve_clicks.get(piece_letter.upper())
-        if not target:
-            raise RuntimeError(
-                f"No reserve click configured for piece '{piece_letter}'. "
-                f"Add reserve_clicks['{piece_letter}'] = [x, y] to {self.config_path}"
+        # Our color, our piece
+        piece = Piece(int(pt) if self._my_side == Color.WHITE else int(pt) + 8)
+        tmpl = self._templates.get(piece)
+
+        # Fallback: if exact color template missing, accept either color (UI may tint icons differently)
+        search_pieces = [piece]
+        if tmpl is None:
+            search_pieces = [Piece(int(pt)), Piece(int(pt) + 8)]
+
+        found = None
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        for p in search_pieces:
+            t = self._templates.get(p)
+            if t is None:
+                continue
+            th, tw = t.shape[:2]
+            if gray.shape[0] < th or gray.shape[1] < tw:
+                continue
+            res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED)
+            score = float(res.max())
+            if score >= TM_THRESH:
+                _, _, _, max_loc = cv2.minMaxLoc(res)
+                found = (max_loc[0] + tw // 2, max_loc[1] + th // 2)
+                break
+
+        if found is None:
+            # As a degrade, click center of pockets to pick first piece, then drag.
+            sx = r.x + r.w // 3
+            sy = r.y + r.h // 3
+        else:
+            sx = r.x + found[0]
+            sy = r.y + found[1]
+
+        tx, ty = self._square_center_xy(to_sq)
+
+        pyautogui.moveTo(sx, sy, duration=0)
+        pyautogui.mouseDown()
+        pyautogui.moveTo(tx, ty, duration=0)
+        pyautogui.mouseUp()
+
+    # ------------------------ Persistence ------------------------
+
+    def _load_or_prompt_calibration(self, path: Path) -> Calibration:
+        if not path.exists():
+            self.calibrate_interactive()
+        else:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return Calibration(
+                board=Rect(*data["board"]),
+                our_pockets=Rect(*data["our_pockets"]),
             )
-        self._click_xy(int(target[0]), int(target[1]))
-        time.sleep(0.02)
-        self._click_square(dst)
 
-    def _choose_promotion(self, piece_letter: str) -> None:
-        piece_letter = piece_letter.upper()
-
-        # Fast path: explicit click coordinates
-        if piece_letter in self._promotion_clicks:
-            x, y = self._promotion_clicks[piece_letter]
-            self._click_xy(int(x), int(y))
-            return
-
-        # Slow path: search inside a configured promotion panel by template matching
-        if not self._promotion_panel:
-            # If not configured, we can't auto-select; leave to default UI if any.
-            return
-
-        panel_img = self._grab.grab(self._promotion_panel)
-        # Reuse templates from classifier
-        wanted_map = {"W": "w_w", "F": "w_f", "H": "w_h"}
-        # If we are black promoting, look for black templates instead (many UIs show our color)
-        key = wanted_map[piece_letter]
-        if self.my_side == Color.BLACK and f"b_{key[2:]}" in self._classifier.templates:
-            key = f"b_{key[2:]}"
-
-        templ = self._classifier.templates.get(key)
-        if templ is None:
-            return
-
-        panel_gray = cv2.cvtColor(panel_img, cv2.COLOR_BGR2GRAY)
-        # Scale template to a reasonable size relative to panel height
-        scale = min(1.5, max(0.5, self._promotion_panel.h / 200.0))
-        t = cv2.resize(templ, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        res = cv2.matchTemplate(panel_gray, t, cv2.TM_CCOEFF_NORMED)
-        _, _, _, max_loc = cv2.minMaxLoc(res)
-        th, tw = t.shape[:2]
-        center = (
-            self._promotion_panel.x + max_loc[0] + tw // 2,
-            self._promotion_panel.y + max_loc[1] + th // 2,
-        )
-        self._click_xy(center[0], center[1])
-
-    # ----------------- optional helpers to extend config -----------------
-
-    def set_reserve_click(self, piece_letter: str, x: int, y: int) -> None:
-        self._reserve_clicks[piece_letter.upper()] = (x, y)
-        self._save_config()
-
-    def set_promotion_click(self, piece_letter: str, x: int, y: int) -> None:
-        self._promotion_clicks[piece_letter.upper()] = (x, y)
-        self._save_config()
-
-    def set_promotion_panel(self, x: int, y: int, w: int, h: int) -> None:
-        self._promotion_panel = BBox(x, y, w, h)
-        self._save_config()
+    def _save_calibration(self, path: Path, calib: Calibration) -> None:
+        data = {
+            "board": [calib.board.x, calib.board.y, calib.board.w, calib.board.h],
+            "our_pockets": [
+                calib.our_pockets.x,
+                calib.our_pockets.y,
+                calib.our_pockets.w,
+                calib.our_pockets.h,
+            ],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)

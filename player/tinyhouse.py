@@ -14,6 +14,15 @@ class Color(IntEnum):
     def other(self) -> "Color":
         return Color(self ^ 1)
 
+    def to_string(self) -> str:
+        match self:
+            case Color.WHITE:
+                return "white"
+            case Color.BLACK:
+                return "black"
+            case _:
+                return "unknown"
+
 
 class PieceType(IntEnum):
     NO_PIECE_TYPE = 0
@@ -25,6 +34,23 @@ class PieceType(IntEnum):
 
     ALL_PIECES = 0
     PIECE_TYPE_NB = 8
+
+    def to_string(self) -> str:
+        match self:
+            case PieceType.PAWN:
+                return "pawn"
+            case PieceType.HORSE:
+                return "horse"
+            case PieceType.FERZ:
+                return "ferz"
+            case PieceType.WAZIR:
+                return "wazir"
+            case PieceType.KING:
+                return "king"
+            case PieceType.NO_PIECE_TYPE:
+                return "none"
+            case _:
+                return "unknown"
 
 
 class Piece(IntEnum):
@@ -45,6 +71,13 @@ class Piece(IntEnum):
     B_KING = PieceType.KING + 8
 
     PIECE_NB = 16
+
+    def to_string(self) -> str:
+        if self == Piece.NO_PIECE:
+            return "none"
+        color = "white" if self < 8 else "black"
+        piece_type = PieceType(self & 7).to_string()
+        return f"{color} {piece_type}"
 
 
 class Square(IntEnum):
@@ -67,6 +100,15 @@ class Square(IntEnum):
         SQ_D4,
         SQ_NONE,
     ) = range(17)
+
+    def to_string(self) -> str:
+        if self == Square.SQ_NONE:
+            return "none"
+        files = "abcd"
+        ranks = "1234"
+        file_idx = int(self) % 4
+        rank_idx = int(self) // 4
+        return f"{files[file_idx]}{ranks[rank_idx]}"
 
 
 SQUARE_ZERO = Square.SQ_A1
@@ -193,14 +235,14 @@ def code_from_piece(p: Piece) -> str:
 
 
 FILES_BY_PIECE = {
-    Piece.W_PAWN: "w_p.svg",
-    Piece.W_HORSE: "w_h.svg",
-    Piece.W_FERZ: "w_f.svg",
-    Piece.W_WAZIR: "w_w.svg",
-    Piece.W_KING: "w_k.svg",
-    Piece.B_PAWN: "b_p.svg",
-    Piece.B_HORSE: "b_h.svg",
-    Piece.B_FERZ: "b_f.svg",
-    Piece.B_WAZIR: "b_w.svg",
-    Piece.B_KING: "b_k.svg",
+    Piece.W_PAWN: "w_p.png",
+    Piece.W_HORSE: "w_h.png",
+    Piece.W_FERZ: "w_f.png",
+    Piece.W_WAZIR: "w_w.png",
+    Piece.W_KING: "w_k.png",
+    Piece.B_PAWN: "b_p.png",
+    Piece.B_HORSE: "b_h.png",
+    Piece.B_FERZ: "b_f.png",
+    Piece.B_WAZIR: "b_w.png",
+    Piece.B_KING: "b_k.png",
 }

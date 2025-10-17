@@ -4,7 +4,7 @@ from screen_controller import ScreenController
 from engine_bridge import Engine
 
 SEARCH_DEPTH = 9
-ENGINE_PATH = "..\engine_main.exe"
+ENGINE_PATH = r"..\engine_main.exe"
 
 # Set this to your variant's start position FEN
 START_FEN = "fhwk/3p/P3/KWHF w 1"
