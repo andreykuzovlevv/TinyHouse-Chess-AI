@@ -27,7 +27,7 @@ def main():
         if not our_turn:
             mv = sc.detect_move()
             if mv is None:
-                time.sleep(0.3)
+                time.sleep(0.1)
                 continue
 
             # Advance engine with opponent move

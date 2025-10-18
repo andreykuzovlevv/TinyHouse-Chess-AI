@@ -88,7 +88,7 @@ class ScreenController:
     def __init__(
         self,
         calib_path: Path = CALIB_PATH,
-        cls_model_path: str = "models/square_cls.pt",
+        cls_model_path: str = "models/squares_cls2.pt",
         pockets_model_path: str = "models/pockets.pt",
     ):
         pyautogui.FAILSAFE = False
@@ -642,7 +642,7 @@ class ScreenController:
             (row=1, col=left)  -> HORSE
             (row=1, col=right) -> empty
         """
-        time.sleep(0.2)
+        time.sleep(0.1)
         # --- Determine which two on-screen columns the popup spans ---
         promo_col = self._square_to_screen_col(sq)  # 0..3 (left->right on screen)
 
@@ -680,6 +680,7 @@ class ScreenController:
         cy = by + int((target_row + 0.5) * self._cell_h)
 
         pyautogui.moveTo(cx, cy, duration=0)
+        time.sleep(0.1)
         pyautogui.click()
 
     def _do_drop_on_ui(self, pt: PieceType, to_sq: Square) -> None:
