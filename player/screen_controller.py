@@ -138,6 +138,11 @@ class ScreenController:
         if not highlighted:
             return None
 
+        time.sleep(0.1)
+        highlighted = self._detect_highlight_cells(img)
+        if not highlighted:
+            return None
+
         # Map image-cell indices to board Squares (White perspective)
         hl_squares = [self._cell_index_to_square(i) for i in highlighted]
 
@@ -159,36 +164,62 @@ class ScreenController:
 
         if len(hl_squares) == 2:
             a, b = hl_squares
-            # Decide which is origin vs destination.
-            # Heuristic: origin cell is empty AFTER the move; destination is occupied.
+
+            # classify both highlighted squares *after* the move
             ptA, cA = self._classify_cell_piece(img, self._square_to_cell_index(a))
             ptB, cB = self._classify_cell_piece(img, self._square_to_cell_index(b))
 
-            if ptA == PieceType.NO_PIECE_TYPE and ptB == PieceType.NO_PIECE_TYPE:
-                return None
+            NO = PieceType.NO_PIECE_TYPE
+            opp = self._my_side.other()
 
-            if ptA != PieceType.NO_PIECE_TYPE and ptB != PieceType.NO_PIECE_TYPE:
-                return None
+            # --- 1) Color-based disambiguation (preferred) ---
+            if (cA == opp) ^ (cB == opp):  # exactly one is opponent color
+                to_sq = a if cA == opp else b
+                from_sq = b if cA == opp else a
+            else:
+                # --- 2) Occupancy-based fallback (explicit) ---
+                onlyAempty = (ptA == NO) and (ptB != NO)
+                onlyBempty = (ptB == NO) and (ptA != NO)
 
-            from_sq, to_sq = (a, b) if not int(ptA) and int(ptB) else (b, a)
+                if onlyAempty:
+                    from_sq, to_sq = a, b
+                elif onlyBempty:
+                    from_sq, to_sq = b, a
+                else:
+                    # ambiguous (both empty or both occupied or low-confidence): give up
+                    return None
+
+            # --- 3) (Optional) Pawn-direction sanity check ---
+            # If the destination is detected as an opponent pawn but the move goes the wrong way,
+            # try swapping once. This fixes the "white pawn a3→a2" symptom.
+            pt_to, col_to = self._classify_cell_piece(
+                img, self._square_to_cell_index(to_sq)
+            )
+            if col_to == opp and pt_to == PieceType.PAWN:
+                dr = int(rank_of(to_sq)) - int(rank_of(from_sq))
+                forward = 1 if opp == Color.WHITE else -1
+                if dr != forward:
+                    # swap if flipping yields a proper forward pawn step
+                    dr2 = int(rank_of(from_sq)) - int(rank_of(to_sq))
+                    if dr2 == forward:
+                        from_sq, to_sq = to_sq, from_sq
+                    else:
+                        return None  # still inconsistent; better to skip than report a bad move
+
             print("from: ", from_sq.to_string(), "\nto: ", to_sq.to_string())
 
-            # Determine if this was a promotion by opponent:
-            was_pawn = True if from_sq in self._opp_pawns else False
-
+            # Determine promotion (unchanged)
+            was_pawn = from_sq in self._opp_pawns
             dest_last_rank = rank_of(to_sq) == (
                 Rank.RANK_4 if self._my_side.other() == Color.WHITE else Rank.RANK_1
             )
             promo_suffix = ""
             if was_pawn and dest_last_rank:
-                # Identify which piece now sits on to_sq (must be one of H/W/F)
-                pt_to, _col_to = self._classify_cell_piece(
+                pt_to2, _ = self._classify_cell_piece(
                     img, self._square_to_cell_index(to_sq)
                 )
-                if pt_to in (PieceType.HORSE, PieceType.WAZIR, PieceType.FERZ):
-                    promo_suffix = f"={pt_code(pt_to)}"
-
-            print("was pawn: ", was_pawn, ". last rank: ", dest_last_rank)
+                if pt_to2 in (PieceType.HORSE, PieceType.WAZIR, PieceType.FERZ):
+                    promo_suffix = f"={pt_code(pt_to2)}"
 
             mv = f"{square_to_str(from_sq)}{square_to_str(to_sq)}{promo_suffix}"
 
@@ -198,11 +229,6 @@ class ScreenController:
                     self._opp_pawns.append(to_sq)
 
             return mv
-
-        if len(hl_squares) > 2:
-            raise Exception("Number of Highlighted squares was more then 2")
-
-        return None
 
     def execute_ui_move(self, move_str: str) -> None:
         """

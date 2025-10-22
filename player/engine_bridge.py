@@ -23,7 +23,7 @@ class Engine:
         t0 = time.time()
         while True:
             try:
-                line = self.outq.get(timeout=0.05)
+                line = self.outq.get(timeout=0.2)
             except queue.Empty:
                 if time.time() - t0 > timeout:
                     raise TimeoutError(f"timeout waiting for '{prefix}'")

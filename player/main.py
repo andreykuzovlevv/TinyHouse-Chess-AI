@@ -3,7 +3,7 @@ from tinyhouse import Color
 from screen_controller import ScreenController
 from engine_bridge import Engine
 
-SEARCH_DEPTH = 9
+SEARCH_DEPTH = 8
 ENGINE_PATH = r"..\engine_main.exe"
 
 # Set this to your variant's start position FEN
