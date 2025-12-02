@@ -103,19 +103,3 @@ SearchResult search_best_move(Position& pos, int depth) {
     return {bestMove, bestScore};
 }
 }  // namespace tiny
-
-/*
-Example usage:
-
-int main() {
-    Position pos;                 // however you construct it
-    // ... set up position ...
-
-    int depth = 6;
-    SearchResult res = search_best_move(pos, depth);
-
-    // If you have a UCI helper: UCI::move(res.bestMove, pos.is_chess960())
-    std::cout << "bestmove " << UCI::move(res.bestMove, false)
-              << " score " << res.score << "\n";
-}
-*/
