@@ -1,6 +1,16 @@
 #include "minmax.h"
 
+#include <chrono>
+
 namespace tiny {
+
+namespace {
+// Global node counter for the current search.
+std::uint64_t g_nodes_explored = 0;
+
+using Clock   = std::chrono::steady_clock;
+using Seconds = std::chrono::duration<double>;
+}  // namespace
 
 // Material-only evaluation, side-to-move perspective.
 // Positive means the side to move is better.
@@ -25,6 +35,9 @@ Value evaluate(const Position& pos) {
 // Core negamax with alpha-beta pruning.
 // Returns a score from the perspective of the side to move in 'pos'.
 Value negamax(Position& pos, int depth, int alpha, int beta, int ply) {
+    // Count this node
+    ++g_nodes_explored;
+
     // Repetition draw
     if (pos.is_draw(ply)) return VALUE_DRAW;
 
@@ -67,15 +80,45 @@ Value negamax(Position& pos, int depth, int alpha, int beta, int ply) {
 
 // Returns the best move and its score for the current position.
 SearchResult search_best_move(Position& pos, int depth) {
+    // Reset node counter for this search
+    g_nodes_explored = 0;
+
+    // Start timer
+    auto start_time = Clock::now();
+
     MoveList<LEGAL> moves(pos);
 
     // Handle immediate terminals at root
     if (moves.size() == 0) {
+        g_nodes_explored = 1;  // count the root position
+
+        auto    end_time = Clock::now();
+        Seconds elapsed  = end_time - start_time;
+        double  secs     = elapsed.count();
+        double  nps      = (secs > 0.0) ? (g_nodes_explored / secs) : 0.0;
+
+        std::cout << "Search time: " << secs << " s, "
+                  << "nodes: " << g_nodes_explored << ", "
+                  << "speed: " << nps << " nodes/s\n";
+
         int terminalScore =
             pos.checkers() ? (-VALUE_MATE /* + ply=0 */) : (+VALUE_MATE /* - ply=0 */);
         return {MOVE_NONE, terminalScore};
     }
-    if (pos.is_draw(/*ply=*/0)) return {MOVE_NONE, VALUE_DRAW};
+    if (pos.is_draw(/*ply=*/0)) {
+        g_nodes_explored = 1;  // count the root position
+
+        auto    end_time = Clock::now();
+        Seconds elapsed  = end_time - start_time;
+        double  secs     = elapsed.count();
+        double  nps      = (secs > 0.0) ? (g_nodes_explored / secs) : 0.0;
+
+        std::cout << "Search time: " << secs << " s, "
+                  << "nodes: " << g_nodes_explored << ", "
+                  << "speed: " << nps << " nodes/s\n";
+
+        return {MOVE_NONE, VALUE_DRAW};
+    }
 
     int alpha = -VALUE_MATE;
     int beta  = +VALUE_MATE;
@@ -99,6 +142,16 @@ SearchResult search_best_move(Position& pos, int depth) {
             alpha = score;
         }
     }
+
+    // Stop timer and print stats at the end of the search
+    auto    end_time = Clock::now();
+    Seconds elapsed  = end_time - start_time;
+    double  secs     = elapsed.count();
+    double  nps      = (secs > 0.0) ? (g_nodes_explored / secs) : 0.0;
+
+    std::cout << "Search time: " << secs << " s, "
+              << "nodes: " << g_nodes_explored << ", "
+              << "speed: " << nps << " nodes/s\n";
 
     return {bestMove, bestScore};
 }

@@ -14,13 +14,24 @@ For the AI, I went with a classic **negamax** search, implemented in [`minmax.cc
 At the moment there is:
 
 - No parallel processing
-- No move pruning
+- No advanced pruning beyond basic alpha–beta
 
-Despite that, the engine already reaches decent search speeds (exact benchmarks still to be measured, but there’s room for them here).
+Despite that, the engine already reaches solid search speeds on a single thread.
 
-Current performance:
-- **Depth 9 plies**: ~3–5 seconds  
-- **Depth 12 plies**: ~5–20 seconds
+Current performance (depth is in **plies**, i.e. half-moves):
+
+- **Depth 9 plies**  
+  - Time: ~0.17–0.60 s  
+  - Nodes: ~1.8M–6.4M  
+  - Speed: **≈ 10–11 million nodes/s**
+
+- **Depth 12 plies**  
+  - Time: ~15–42 s  
+  - Nodes: ~160M–420M  
+  - Speed: **≈ 9.5–10.5 million nodes/s**
+
+Across these tests, the node speed stays very stable (around **10M nodes per second**), and the effective branching factor at these depths comes out to roughly **4–4.5** moves per ply after alpha–beta pruning.
+
 
 ## UI
 
