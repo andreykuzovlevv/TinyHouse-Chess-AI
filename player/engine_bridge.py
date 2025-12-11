@@ -42,8 +42,23 @@ class Engine:
     def play(self, move: str) -> bool:
         with self.lock:
             self._send(f"play {move}")
-            line = self._expect("played", timeout=3.0)
-            return line.startswith("played")
+            # Wait for either a confirmation 'played ...' or an 'info string illegal'
+            t0 = time.time()
+            timeout = 3.0
+            while True:
+                try:
+                    line = self.outq.get(timeout=0.2)
+                except queue.Empty:
+                    if time.time() - t0 > timeout:
+                        raise TimeoutError(
+                            "timeout waiting for 'played' or 'info string illegal'"
+                        )
+                    continue
+                if line.startswith("played"):
+                    return True
+                if line.startswith("info string illegal"):
+                    return False
+                # ignore other lines
 
     def go(self, depth: int) -> dict:
         with self.lock:

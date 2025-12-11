@@ -172,41 +172,32 @@ class ScreenController:
             NO = PieceType.NO_PIECE_TYPE
             opp = self._my_side.other()
 
-            # --- 1) Color-based disambiguation (preferred) ---
-            if (cA == opp) ^ (cB == opp):  # exactly one is opponent color
-                to_sq = a if cA == opp else b
-                from_sq = b if cA == opp else a
+            # Occupancy-based fallback---
+            onlyAempty = (ptA == NO) and (ptB != NO)
+            onlyBempty = (ptB == NO) and (ptA != NO)
+
+            if onlyAempty:
+                from_sq, to_sq = a, b
+                print(
+                    "Opp move From:",
+                    from_sq.to_string(),
+                    ptA.to_string(),
+                    "To: ",
+                    to_sq.to_string(),
+                    ptB.to_string(),
+                )
+            elif onlyBempty:
+                from_sq, to_sq = b, a
+                print(
+                    "Opp move From:",
+                    from_sq.to_string(),
+                    ptB.to_string(),
+                    "To:",
+                    to_sq.to_string(),
+                    ptA.to_string(),
+                )
             else:
-                # --- 2) Occupancy-based fallback (explicit) ---
-                onlyAempty = (ptA == NO) and (ptB != NO)
-                onlyBempty = (ptB == NO) and (ptA != NO)
-
-                if onlyAempty:
-                    from_sq, to_sq = a, b
-                elif onlyBempty:
-                    from_sq, to_sq = b, a
-                else:
-                    # ambiguous (both empty or both occupied or low-confidence): give up
-                    return None
-
-            # --- 3) (Optional) Pawn-direction sanity check ---
-            # If the destination is detected as an opponent pawn but the move goes the wrong way,
-            # try swapping once. This fixes the "white pawn a3→a2" symptom.
-            pt_to, col_to = self._classify_cell_piece(
-                img, self._square_to_cell_index(to_sq)
-            )
-            if col_to == opp and pt_to == PieceType.PAWN:
-                dr = int(rank_of(to_sq)) - int(rank_of(from_sq))
-                forward = 1 if opp == Color.WHITE else -1
-                if dr != forward:
-                    # swap if flipping yields a proper forward pawn step
-                    dr2 = int(rank_of(from_sq)) - int(rank_of(to_sq))
-                    if dr2 == forward:
-                        from_sq, to_sq = to_sq, from_sq
-                    else:
-                        return None  # still inconsistent; better to skip than report a bad move
-
-            print("from: ", from_sq.to_string(), "\nto: ", to_sq.to_string())
+                return None
 
             # Determine promotion (unchanged)
             was_pawn = from_sq in self._opp_pawns

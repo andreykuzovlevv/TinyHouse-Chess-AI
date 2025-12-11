@@ -3,7 +3,7 @@ from tinyhouse import Color
 from screen_controller import ScreenController
 from engine_bridge import Engine
 
-SEARCH_DEPTH = 8
+SEARCH_DEPTH = 6
 ENGINE_PATH = r"..\engine_main.exe"
 
 # Set this to your variant's start position FEN
@@ -30,8 +30,39 @@ def main():
                 time.sleep(0.1)
                 continue
 
-            # Advance engine with opponent move
-            eng.play(mv)
+            # Advance engine with opponent move. If the engine rejects the
+            # detected move (bad frame / bad detection), retry detection a few
+            # times instead of crashing.
+            max_retries = 5
+            attempt = 0
+            success = False
+            while attempt < max_retries:
+                try:
+                    ok = eng.play(mv)
+                except TimeoutError as e:
+                    print("Engine timeout while playing move:", e)
+                    ok = False
+                if ok:
+                    success = True
+                    break
+
+                # rejected -> re-detect and retry
+                attempt += 1
+                print(
+                    f"Engine rejected move '{mv}', retrying detection ({attempt}/{max_retries})..."
+                )
+                time.sleep(0.2)
+                mv = sc.detect_move()
+                if mv is None:
+                    time.sleep(0.1)
+                    continue
+
+            if not success:
+                print(
+                    "Failed to apply detected move after retries; continuing to wait."
+                )
+                # keep waiting for a valid detection
+                continue
 
             our_turn = True
             continue
@@ -39,10 +70,9 @@ def main():
         # ---- Our turn ----
         # Ask engine for a move from its current internal Position
 
-        print("start search")
         res = eng.go(SEARCH_DEPTH)
         mv = res["move"]
-        print("Move found: ", mv)
+        print("Engine move: ", mv)
         if mv == "none" or not mv:
             # No legal move (checkmate/stalemate). Stop.
             break
