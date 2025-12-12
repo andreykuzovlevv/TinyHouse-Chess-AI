@@ -78,6 +78,12 @@ Value negamax(Position& pos, int depth, int alpha, int beta, int ply) {
     return best;
 }
 
+void printstats(double secs, double nps, std::uint64_t nodes) {
+    std::cout << "Search time: " << secs << " s, "
+              << "nodes: " << nodes << ", "
+              << "speed: " << nps << " nodes/s\n";
+}
+
 // Returns the best move and its score for the current position.
 SearchResult search_best_move(Position& pos, int depth) {
     // Reset node counter for this search
@@ -97,9 +103,7 @@ SearchResult search_best_move(Position& pos, int depth) {
         double  secs     = elapsed.count();
         double  nps      = (secs > 0.0) ? (g_nodes_explored / secs) : 0.0;
 
-        std::cout << "Search time: " << secs << " s, "
-                  << "nodes: " << g_nodes_explored << ", "
-                  << "speed: " << nps << " nodes/s\n";
+        printstats(secs, nps, g_nodes_explored);
 
         int terminalScore =
             pos.checkers() ? (-VALUE_MATE /* + ply=0 */) : (+VALUE_MATE /* - ply=0 */);
@@ -113,9 +117,7 @@ SearchResult search_best_move(Position& pos, int depth) {
         double  secs     = elapsed.count();
         double  nps      = (secs > 0.0) ? (g_nodes_explored / secs) : 0.0;
 
-        std::cout << "Search time: " << secs << " s, "
-                  << "nodes: " << g_nodes_explored << ", "
-                  << "speed: " << nps << " nodes/s\n";
+        printstats(secs, nps, g_nodes_explored);
 
         return {MOVE_NONE, VALUE_DRAW};
     }
@@ -149,9 +151,7 @@ SearchResult search_best_move(Position& pos, int depth) {
     double  secs     = elapsed.count();
     double  nps      = (secs > 0.0) ? (g_nodes_explored / secs) : 0.0;
 
-    std::cout << "Search time: " << secs << " s, "
-              << "nodes: " << g_nodes_explored << ", "
-              << "speed: " << nps << " nodes/s\n";
+    printstats(secs, nps, g_nodes_explored);
 
     return {bestMove, bestScore};
 }

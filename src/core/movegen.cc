@@ -149,6 +149,11 @@ Move* generate_all(const Position& pos, Move* moveList) {
             }
         };
 
+        moveList = generate_moves<Us, WAZIR>(pos, moveList, target);
+        moveList = generate_moves<Us, FERZ>(pos, moveList, target);
+        moveList = generate_moves<Us, HORSE>(pos, moveList, target);
+        moveList = generate_pawn_moves<Us, Type>(pos, moveList, target);
+
         // Pawns: exclude last rank
         Bitboard pawnMask = dropMask & (Us == WHITE ? ~Rank4BB : ~Rank1BB);
         gen_drops_for(PAWN, pawnMask);
@@ -157,11 +162,6 @@ Move* generate_all(const Position& pos, Move* moveList) {
         gen_drops_for(HORSE, dropMask);
         gen_drops_for(WAZIR, dropMask);
         gen_drops_for(FERZ, dropMask);
-
-        moveList = generate_moves<Us, WAZIR>(pos, moveList, target);
-        moveList = generate_moves<Us, FERZ>(pos, moveList, target);
-        moveList = generate_moves<Us, HORSE>(pos, moveList, target);
-        moveList = generate_pawn_moves<Us, Type>(pos, moveList, target);
     }
 
     Bitboard b = attacks_bb<KING>(ksq) & (Type == EVASIONS ? ~pos.pieces(Us) : target);
