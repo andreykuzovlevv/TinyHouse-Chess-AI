@@ -20,7 +20,7 @@ import torchvision.transforms as T
 # ---------- Fixed settings (no knobs) ----------
 DATA_SRC = "dataset_labeled/squares"  # your labeled folders (W_PAWN, EMPTY, ...)
 DATA_AUG = "dataset_labeled/squares_aug"  # rebuilt each run
-MODEL_OUT = "models/squares_cls2.pt"
+MODEL_OUT = "models/squares_cls3.pt"
 IMG_SIZE = 128
 EPOCHS = 40
 BATCH = 32

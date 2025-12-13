@@ -3,23 +3,19 @@ from tinyhouse import Color
 from screen_controller import ScreenController
 from engine_bridge import Engine
 
-SEARCH_DEPTH = 9
+SEARCH_DEPTH = 7
 ENGINE_PATH = r"..\engine_main.exe"
 
-# Set this to your variant's start position FEN
 START_FEN = "fhwk/3p/P3/KWHF w 1"
 
 
-def main():
+def main() -> None:
     sc = ScreenController()
     eng = Engine(ENGINE_PATH)
 
-    # Initialize engine ONCE from the initial FEN
-    # (You can also read the first on-screen position and assert it matches START_FEN)
     eng.newgame(START_FEN)
 
     # If we are Black and it is White to move, we must wait for the opponent first.
-
     our_turn = Color.WHITE == sc.my_side
     print("My side: ", sc.my_side.to_string())
 

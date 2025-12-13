@@ -3,7 +3,7 @@ import subprocess, threading, queue, time
 
 
 class Engine:
-    def __init__(self, path):
+    def __init__(self, path) -> None:
         self.p = subprocess.Popen(
             [path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1
         )
@@ -11,11 +11,13 @@ class Engine:
         self.lock = threading.Lock()
         threading.Thread(target=self._reader, daemon=True).start()
 
-    def _reader(self):
+    def _reader(self) -> None:
         for line in self.p.stdout:
-            self.outq.put(line.rstrip("\n"))
+            line = line.rstrip("\n")
+            print(line, flush=True)
+            self.outq.put(line)
 
-    def _send(self, s: str):
+    def _send(self, s: str) -> None:
         self.p.stdin.write(s + "\n")
         self.p.stdin.flush()
 
@@ -34,7 +36,7 @@ class Engine:
 
     # --- Public API: each call holds lock until it gets its reply ---
 
-    def newgame(self, fen: str):
+    def newgame(self, fen: str) -> None:
         with self.lock:
             self._send(f"newgame {fen}")
             # optional ack; safe to proceed immediately
@@ -72,4 +74,12 @@ class Engine:
                     if "score" in toks:
                         best["score"] = toks[toks.index("score") + 1]
                     return best
-                # ignore "info ..." lines
+                # capture evals from "info ... score <n>" lines so caller can see latest
+                if line.startswith("info"):
+                    toks = line.split()
+                    if "score" in toks:
+                        try:
+                            best["score"] = toks[toks.index("score") + 1]
+                        except Exception:
+                            pass
+                    # continue waiting for bestmove

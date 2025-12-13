@@ -88,7 +88,7 @@ class ScreenController:
     def __init__(
         self,
         calib_path: Path = CALIB_PATH,
-        cls_model_path: str = "models/squares_cls2.pt",
+        cls_model_path: str = "models/squares_cls3.pt",
         pockets_model_path: str = "models/pockets.pt",
     ):
         pyautogui.FAILSAFE = False
